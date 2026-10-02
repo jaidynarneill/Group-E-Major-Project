@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QGroupBox,
     QScrollArea,
+    QPlainTextEdit,
 )
 from PyQt5.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 from matplotlib import rcParams
@@ -101,28 +102,28 @@ class PlotPanel(QWidget):
 
     def initUI(self):
         rcParams.update({
-            "font.size": 16,
-            "axes.titlesize": 22,
-            "axes.labelsize": 16,
-            "xtick.labelsize": 14,
-            "ytick.labelsize": 14,
+            "font.size": 19,
+            "axes.titlesize": 26,
+            "axes.labelsize": 19,
+            "xtick.labelsize": 17,
+            "ytick.labelsize": 17,
             "legend.fontsize": 10,
         })
         self.setStyleSheet("""
             QWidget {
                 background-color: #1e1e1e;
                 color: #e6e6e6;
-                font-size: 24px;
+                font-size: 20px;
             }
             QLabel#title {
-                font-size: 42px;
+                font-size: 36px;
                 font-weight: bold;
                 padding: 10px 0;
             }
             QLabel.header {
                 color: #9cdcfe;
                 font-weight: bold;
-                font-size: 24px;
+                font-size: 22px;
             }
             QGroupBox {
                 border: 1px solid #454545;
@@ -174,7 +175,7 @@ class PlotPanel(QWidget):
         for column, text in enumerate(headers):
             header = QLabel(text)
             header.setProperty("class", "header")
-            header.setStyleSheet("color: #9cdcfe; font-weight: bold; font-size: 24px;")
+            header.setStyleSheet("color: #9cdcfe; font-weight: bold; font-size: 22px;")
             grid.addWidget(header, 0, column)
 
         for index in range(3):
@@ -231,12 +232,20 @@ class PlotPanel(QWidget):
         self.status_label.setWordWrap(True)
         results_layout.addWidget(self.status_label)
 
-        self.figure = Figure(figsize=(12, 15), facecolor="#1e1e1e")
+        self.result_output = QPlainTextEdit()
+        self.result_output.setReadOnly(True)
+        self.result_output.setPlaceholderText("Per-run calculation details will appear here.")
+        self.result_output.setMinimumHeight(210)
+        self.result_output.setMaximumHeight(340)
+        self.result_output.setStyleSheet("QPlainTextEdit { font-size: 18px; }")
+        results_layout.addWidget(self.result_output)
+
+        self.figure = Figure(figsize=(13, 23), facecolor="#1e1e1e")
         self.canvas = FigureCanvas(self.figure)
-        self.canvas.setMinimumSize(1100, 1500)
+        self.canvas.setMinimumSize(1300, 2300)
         self.output_scroll = QScrollArea()
         self.output_scroll.setWidgetResizable(True)
-        self.output_scroll.setMinimumHeight(500)
+        self.output_scroll.setMinimumHeight(650)
         self.output_scroll.setWidget(self.canvas)
         results_layout.addWidget(self.output_scroll, stretch=1)
 
@@ -257,10 +266,10 @@ class PlotPanel(QWidget):
         self.figure.clear()
 
         plot_titles = [
-            "Equation of state",
-            "Stress-strain response",
-            "Elastic constants",
-            "Surface energies",
+            "Equation Of State",
+            "Stress-Strain Response",
+            "Elastic Constants",
+            "Surface Energies",
         ]
 
         for index, title in enumerate(plot_titles, start=1):
@@ -302,6 +311,7 @@ class PlotPanel(QWidget):
 
         self.run_button.setEnabled(False)
         self.status_label.setText("Starting calculations...")
+        self.result_output.clear()
 
         self._thread = QThread(self)
         self._worker = CalculationWorker(configurations)
@@ -323,7 +333,8 @@ class PlotPanel(QWidget):
     def show_results(self, results, errors):
         if not results:
             message = "No calculations completed. " + "\n".join(errors)
-            self.status_label.setText(message)
+            self.status_label.setText("Run finished with errors.")
+            self.result_output.setPlainText(message)
             self.show_empty_plots("No calculation data available")
             return
 
@@ -333,16 +344,37 @@ class PlotPanel(QWidget):
         self._plot_surface_energies(results)
         summaries = []
         for label, result in results:
-            summaries.append(
-                f"{label}: a0={result['a0']:.4f} Å, B(EOS)={result['B_EOS']:.2f} GPa, "
-                f"C11={result['C11']:.2f}, C12={result['C12']:.2f}, "
-                f"C44={result['C44']:.2f}, E={result['E']:.2f} GPa, nu={result['nu']:.4f}"
-            )
+            run_name = label.split(":", 1)[0]
+            summaries.extend([
+                f"{run_name}: {result['material']} | {result['lattice_structure']} | {result['method']}",
+                "  Equation Of State",
+                f"    a0 = {result['a0']:.5f} Å   V0 = {result['V0']:.5f} Å³/cell",
+                f"    E0 = {result['E0_atom']:.7f} eV/atom   B(EOS) = {result['B_EOS']:.3f} GPa   B' = {result['B_prime']:.4f}",
+                "  Elastic Constants",
+                f"    C11 = {result['C11']:.3f} GPa   C12 = {result['C12']:.3f} GPa   C44 = {result['C44']:.3f} GPa",
+                f"    R²(C11/C12/C44) = {result['R2_C11']:.6f} / {result['R2_C12']:.6f} / {result['R2_C44']:.6f}",
+                "  Derived Polycrystalline Properties",
+                f"    B = {result['B_Cij']:.3f} GPa   G(V/R/H) = {result['G_V']:.3f} / {result['G_R']:.3f} / {result['G_H']:.3f} GPa",
+                f"    Young's E = {result['E']:.3f} GPa   Poisson's nu = {result['nu']:.5f}   Zener A = {result['A']:.5f}",
+                "  Surface Energies",
+            ])
+            surfaces = result.get("surface_energy_data", {}).get("surfaces", [])
+            if surfaces:
+                for surface_result in surfaces:
+                    converged = "converged" if surface_result["converged"] else "not converged"
+                    summaries.append(
+                        f"    {surface_result['orientation']} = {surface_result['energy_eV_A2']:.6f} eV/Å² "
+                        f"({converged}; {surface_result['atom_count']} atoms; {surface_result['area_A2']:.2f} Å²)"
+                    )
+            else:
+                summaries.append("    No surface-energy data returned.")
+            summaries.append("")
         if errors:
-            summaries.append("Failed runs: " + " | ".join(errors))
-        self.status_label.setText("\n".join(summaries))
+            summaries.extend(["Run Errors", *[f"  {error}" for error in errors]])
+        self.status_label.setText("Run completed." if not errors else "Run completed with errors.")
+        self.result_output.setPlainText("\n".join(summaries))
         self.figure.subplots_adjust(
-            left=0.16, right=0.98, bottom=0.17, top=0.90, wspace=0.38, hspace=0.52
+            left=0.13, right=0.98, bottom=0.12, top=0.96, wspace=0.32, hspace=0.40
         )
         self.canvas.draw()
 
@@ -360,7 +392,7 @@ class PlotPanel(QWidget):
 
     def _plot_eos(self, results):
         self.figure.clear()
-        axis = self._new_axis(1, "Equation of state", "Volume (Å³/cell)", "Energy (eV/atom)")
+        axis = self._new_axis(1, "Equation Of State", "Volume (Å³/cell)", "Energy (eV/atom)")
         for index, (label, result) in enumerate(results):
             data = result["eos_data"]
             color = f"C{index % 10}"
@@ -378,7 +410,7 @@ class PlotPanel(QWidget):
         axis.legend(fontsize=14)
 
     def _plot_stress_strain(self, results):
-        axis = self._new_axis(2, "Stress-strain response", "Strain", "Stress (GPa)")
+        axis = self._new_axis(2, "Stress-Strain Response", "Strain", "Stress (GPa)")
         components = [
             ("sigma_xx_GPa", "C11", "-"),
             ("sigma_yy_GPa", "C12", "--"),
@@ -402,7 +434,7 @@ class PlotPanel(QWidget):
         axis.legend(fontsize=14, ncol=2)
 
     def _plot_elastic_constants(self, results):
-        axis = self._new_axis(3, "Elastic constants", "Elastic constant", "Value (GPa)")
+        axis = self._new_axis(3, "Elastic Constants", "Elastic Constant", "Value (GPa)")
         names = ["C11", "C12", "C44"]
         positions = np.arange(len(names))
         width = 0.8 / len(results)
@@ -414,7 +446,7 @@ class PlotPanel(QWidget):
         axis.legend(fontsize=14)
 
     def _plot_surface_energies(self, results):
-        axis = self._new_axis(4, "Surface energies", "Surface orientation", "Energy (eV/Å²)")
+        axis = self._new_axis(4, "Surface Energies", "Surface Orientation", "Energy (eV/Å²)")
         available = [
             (label, result, result.get("surface_energy_data", {}).get("surfaces", []))
             for label, result in results

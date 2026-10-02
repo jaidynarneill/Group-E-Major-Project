@@ -1,10 +1,12 @@
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
 from src.analysis.elastic_properties import (
     MEAM_CATALOG,
     birch_murnaghan,
+    create_calculator,
     derive_cubic_properties,
     fit_linear_response,
 )
@@ -36,6 +38,21 @@ class TestElasticProperties(unittest.TestCase):
         self.assertGreater(properties["G_H"], 0.0)
         self.assertGreater(properties["E"], 0.0)
         self.assertGreater(properties["A"], 0.0)
+
+    def test_dft_calculator_uses_bundled_sssp_pseudopotential_and_cutoffs(self):
+        with patch("src.analysis.elastic_properties.shutil.which", return_value="pw.x"):
+            calculator = create_calculator("Aluminum", "DFT")
+
+        self.assertEqual(
+            calculator.profile.pseudo_dir.rsplit("\\", 1)[-1],
+            "library",
+        )
+        self.assertEqual(
+            calculator.parameters["pseudopotentials"]["Al"],
+            "Al.us.pbe.z_3.ld1.psl.v1.0.0-low.upf",
+        )
+        self.assertEqual(calculator.parameters["input_data"]["system"]["ecutwfc"], 30.0)
+        self.assertEqual(calculator.parameters["input_data"]["system"]["ecutrho"], 60.0)
 
 
 if __name__ == "__main__":
