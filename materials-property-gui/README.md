@@ -51,6 +51,18 @@ python src/main.py
 ```
 Follow the on-screen instructions to select materials, structures, and methods, and view the resulting plots.
 
+## Build A Windows Executable
+
+Install the app and build dependencies in the same Python environment, then run the build script from PowerShell:
+
+```powershell
+python -m pip install -r requirements.txt
+python -m pip install -r requirements-build.txt
+.\build_windows.ps1
+```
+
+The executable is `dist/MaterialsPropertyGUI/MaterialsPropertyGUI.exe`; keep the `dist/MaterialsPropertyGUI` folder together when moving or sharing the build. This bundles the GUI, Python packages, and `src/data`. LAMMPS and Quantum ESPRESSO are external programs and must be installed/configured separately. MACE downloads its selected checkpoint the first time it runs, so that first calculation needs internet access.
+
 ## Elastic Calculation Backends
 
 The elastic-properties module performs EOS and small-strain stress calculations for cubic FCC, BCC, diamond, and simple-cubic structures. The material list is read from the elemental records in `src/data/potentials/library.meam`; non-cubic records such as HCP magnesium are excluded because the current backend fits cubic elastic constants. MACE-MP requires `ase` and `mace-torch`. The method dropdown provides MACE-MP Small, Medium, and Large, plus MACE-MPA (the `medium-mpa-0` checkpoint). MEAM uses ASE's LAMMPS calculator; install LAMMPS separately. The bundled `library.meam` contains single-element records, so no separate MEAM parameter file is needed for these elemental calculations. The app selects a canonical element label from the library; set `MEAM_LIBRARY` to use another library file or `LAMMPS_COMMAND` if the executable is not named `lmp`. `MEAM_PAIR_COEFF` can override the generated LAMMPS `pair_coeff` line and accepts `{library}`, `{parameter}`, and `{element}` placeholders.
