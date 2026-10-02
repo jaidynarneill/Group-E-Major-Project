@@ -1,4 +1,5 @@
 import os
+import json
 import re
 import shlex
 import shutil
@@ -13,6 +14,9 @@ from scipy.optimize import curve_fit
 EV_A3_TO_GPA = 160.21766208
 STRAINS = np.array([-0.005, -0.0025, -0.001, 0.001, 0.0025, 0.005])
 DATA_DIRECTORY = Path(__file__).resolve().parents[1] / "data"
+SSSP_DIRECTORY = DATA_DIRECTORY / "potentials" / "sssp-pbe-eff-lib-v2"
+SSSP_LIBRARY_DIRECTORY = SSSP_DIRECTORY / "library"
+SSSP_CUTOFFS_FILE = SSSP_DIRECTORY / "cutoffs.json"
 REFERENCE_LATTICE_PARAMETERS = {"Al": 4.05, "Cu": 3.615, "Si": 5.43}
 CRYSTAL_STRUCTURES = {
     "fcc": "fcc",
@@ -380,13 +384,20 @@ def _create_calculator(
             atom_style="atomic",
             pair_style="meam",
             pair_coeff=[pair_coeff],
-            **calculator_options,
         )
 
     if method == "DFT":
-        pseudo_directory = Path(
-            dft_pseudo_dir or os.getenv("ESPRESSO_PSEUDO_DIR") or DATA_DIRECTORY / "pseudopotentials"
-        ).expanduser().resolve()
+        configured_pseudo_directory = dft_pseudo_dir or os.getenv("ESPRESSO_PSEUDO_DIR")
+        if configured_pseudo_directory:
+            pseudo_directory = Path(configured_pseudo_directory).expanduser().resolve()
+        elif SSSP_LIBRARY_DIRECTORY.is_dir():
+            pseudo_directory = SSSP_LIBRARY_DIRECTORY.resolve()
+        else:
+            pseudo_directory = (DATA_DIRECTORY / "pseudopotentials").resolve()
+        if pseudo_directory.is_dir() and not any(pseudo_directory.glob("*.upf")):
+            nested_library = pseudo_directory / "library"
+            if nested_library.is_dir():
+                pseudo_directory = nested_library
         if not pseudo_directory.is_dir():
             raise FileNotFoundError(
                 "Quantum ESPRESSO pseudopotential directory not found. Set ESPRESSO_PSEUDO_DIR "
@@ -429,6 +440,19 @@ def _create_calculator(
         except ImportError as error:
             raise RuntimeError("DFT calculations require ASE; install it with 'python -m pip install ase'.") from error
 
+        cutoff_metadata = {}
+        if SSSP_CUTOFFS_FILE.is_file():
+            cutoff_metadata = json.loads(SSSP_CUTOFFS_FILE.read_text(encoding="utf-8"))
+        element_cutoffs = cutoff_metadata.get(symbol, {})
+        cutoff_wfc = float(os.getenv(
+            "DFT_ECUTWFC_RY",
+            element_cutoffs.get("cutoff_wfc", 60),
+        ))
+        cutoff_rho = float(os.getenv(
+            "DFT_ECUTRHO_RY",
+            element_cutoffs.get("cutoff_rho", 480),
+        ))
+
         profile = EspressoProfile(command=command, pseudo_dir=str(pseudo_directory))
         return Espresso(
             profile=profile,
@@ -436,8 +460,8 @@ def _create_calculator(
             input_data={
                 "control": {"calculation": "scf", "tstress": True, "tprnfor": True},
                 "system": {
-                    "ecutwfc": float(os.getenv("DFT_ECUTWFC_RY", "60")),
-                    "ecutrho": float(os.getenv("DFT_ECUTRHO_RY", "480")),
+                    "ecutwfc": cutoff_wfc,
+                    "ecutrho": cutoff_rho,
                 },
                 "electrons": {"conv_thr": 1.0e-8},
             },
