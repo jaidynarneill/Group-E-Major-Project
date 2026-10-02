@@ -58,7 +58,7 @@ def main():
     app.setStyleSheet(DARK_THEME)
 
     window = MainWindow()
-    window.showFullScreen()
+
 
     sys.exit(app.exec_())
 
