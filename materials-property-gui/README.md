@@ -1,0 +1,61 @@
+# Materials Property GUI
+
+This project is a graphical user interface (GUI) designed to predict surface energies and elastic properties of materials, specifically copper, aluminum, and silicon, using many-body potentials such as MEAM and S-W. The GUI allows users to select materials, lattice structures, and computational methods, and visualize the results through plots.
+
+## Project Structure
+
+```
+materials-property-gui
+├── src
+│   ├── main.py                # Entry point for the GUI application
+│   ├── ui
+│   │   ├── main_window.py     # Defines the main window layout and integration
+│   │   ├── selection_panel.py  # Implements the selection panel with dropdowns
+│   │   └── plot_panel.py       # Displays output plots for surface energies and elastic constants
+│   ├── analysis
+│   │   ├── surface_energy.py   # Functions to calculate surface energies
+│   │   └── elastic_properties.py # Functions to compute elastic properties
+│   └── data
+│       └── README.md           # Documentation for data formats and sources
+├── tests
+│   ├── test_surface_energy.py   # Unit tests for surface energy calculations
+│   └── test_elastic_properties.py # Unit tests for elastic properties calculations
+├── requirements.txt             # Lists project dependencies
+└── README.md                    # Project documentation and usage guidelines
+```
+
+## Features
+
+- **Material Selection**: Choose from silicon, copper, or aluminum.
+- **Lattice Structure Selection**: Options for FCC and other structures.
+- **Method Selection**: Select computational methods including MEAM, MACE-MP, and DFT.
+- **Comparison Rows**: Compare results across different configurations.
+- **Visualization**: Display plots for surface energies and elastic constants based on selected parameters.
+
+## Installation
+
+To set up the project, clone the repository and install the required dependencies:
+
+```bash
+git clone <repository-url>
+cd materials-property-gui
+pip install -r requirements.txt
+```
+
+## Usage
+
+Run the application using the following command:
+
+```bash
+python src/main.py
+```
+
+Follow the on-screen instructions to select materials, structures, and methods, and view the resulting plots.
+
+## Contributing
+
+Contributions are welcome! Please submit a pull request or open an issue for any enhancements or bug fixes.
+
+## License
+
+This project is licensed under the MIT License. See the LICENSE file for details.
