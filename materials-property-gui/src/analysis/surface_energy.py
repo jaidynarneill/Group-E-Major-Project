@@ -138,7 +138,7 @@ def compute_surface_energies(
 
 def calculate_surface_energy(material, lattice_structure, method, **options):
     """Calculate the (111) surface energy for compatibility with the old API."""
-    crystal_structure = _normalize_structure(lattice_structure)
+    _normalize_structure(lattice_structure)
     preferred_orientation = (1, 1, 1)
     result = compute_surface_energies(
         material,

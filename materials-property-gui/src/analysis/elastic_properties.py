@@ -1,8 +1,9 @@
-import io
 import os
 import re
+import shlex
 import shutil
-import threading
+import subprocess
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -42,7 +43,6 @@ ELEMENT_NAMES = {
     "Ag": "Silver", "Sn": "Tin", "Ta": "Tantalum", "W": "Tungsten",
     "Ir": "Iridium", "Pt": "Platinum", "Au": "Gold", "Pb": "Lead", "Bi": "Bismuth",
 }
-_WINDOWS_LAMMPS_WRITER_LOCK = threading.RLock()
 
 
 def load_meam_library_catalog():
@@ -264,33 +264,115 @@ def _create_calculator(
             pair_coeff = f"* * {library.name} {library_element} {parameter.name} {symbol}"
         else:
             pair_coeff = f"* * {library.name} {library_element} NULL {library_element}"
-        calculator_class = lammpsrun.LAMMPS
-        calculator_options = {}
         if os.name == "nt":
-            class WindowsLAMMPS(lammpsrun.LAMMPS):
-                def run(self, set_atoms=False):
-                    original_writer = lammpsrun.write_lammps_in
+            from ase.calculators.calculator import Calculator, all_changes
+            from ase.calculators.lammps import Prism, convert
+            from ase.io.lammpsdata import write_lammps_data
+            from ase.io.lammpsrun import read_lammps_dump
 
-                    def write_windows_input(*, lammps_in, **kwargs):
-                        buffer = io.StringIO()
-                        original_writer(lammps_in=buffer, **kwargs)
-                        script = buffer.getvalue().replace("log /dev/stdout", "log none")
-                        lammps_in.write(script)
+            class WindowsLAMMPSCalculator(Calculator):
+                implemented_properties = ["energy", "free_energy", "forces", "stress"]
 
-                    with _WINDOWS_LAMMPS_WRITER_LOCK:
-                        lammpsrun.write_lammps_in = write_windows_input
-                        try:
-                            return super().run(set_atoms=set_atoms)
-                        finally:
-                            lammpsrun.write_lammps_in = original_writer
+                def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+                    super().calculate(atoms, properties, system_changes)
+                    prism = Prism(atoms.cell.array, pbc=atoms.get_pbc())
+                    with tempfile.TemporaryDirectory(prefix="materials-meam-") as directory:
+                        working_directory = Path(directory)
+                        for potential_file in files:
+                            shutil.copy2(potential_file, working_directory / Path(potential_file).name)
 
-            calculator_class = WindowsLAMMPS
-            calculator_options = {
-                "keep_alive": False,
-                "lammps_options": "-echo log",
-            }
+                        data_name = "atoms.data"
+                        dump_name = "forces.dump"
+                        with (working_directory / data_name).open("w", encoding="ascii") as data_file:
+                            write_lammps_data(
+                                data_file,
+                                atoms,
+                                specorder=[symbol],
+                                prismobj=prism,
+                                units="metal",
+                                atom_style="atomic",
+                            )
 
-        return calculator_class(
+                        input_script = "\n".join((
+                            "clear",
+                            "units metal",
+                            "atom_style atomic",
+                            "boundary p p p",
+                            "box tilt large",
+                            f"read_data {data_name}",
+                            "pair_style meam",
+                            f"pair_coeff {pair_coeff}",
+                            f"mass 1 {atoms.get_masses()[0]:.12g}",
+                            "thermo_style custom step pe pxx pyy pzz pyz pxz pxy",
+                            "thermo 1",
+                            f"dump results all custom 1 {dump_name} id type x y z fx fy fz",
+                            "dump_modify results sort id",
+                            "run 0",
+                            "log none",
+                            "",
+                        ))
+
+                        if Path(command).is_file():
+                            command_parts = [str(Path(command).resolve())]
+                        else:
+                            command_parts = shlex.split(command, posix=os.name == "posix")
+                            executable = shutil.which(command_parts[0])
+                            if executable:
+                                command_parts[0] = executable
+                        completed = subprocess.run(
+                            [*command_parts, "-echo", "none", "-log", "none"],
+                            input=input_script,
+                            text=True,
+                            capture_output=True,
+                            cwd=working_directory,
+                            timeout=300,
+                            check=False,
+                        )
+                        if completed.returncode != 0:
+                            diagnostic = (completed.stdout + "\n" + completed.stderr).strip()
+                            raise RuntimeError(
+                                f"LAMMPS exited with code {completed.returncode}: {diagnostic[-4000:]}"
+                            )
+
+                        thermo_values = None
+                        for line in completed.stdout.splitlines():
+                            columns = line.split()
+                            if len(columns) == 8:
+                                try:
+                                    values = [float(value) for value in columns]
+                                except ValueError:
+                                    continue
+                                thermo_values = values
+                        if thermo_values is None:
+                            raise RuntimeError(
+                                "LAMMPS completed without a parseable thermo row. "
+                                + completed.stdout[-2000:]
+                            )
+
+                        dump_atoms = read_lammps_dump(
+                            str(working_directory / dump_name),
+                            order=True,
+                            index=-1,
+                            prismobj=prism,
+                            specorder=[symbol],
+                        )
+                        pressure = np.array([
+                            [-thermo_values[2], -thermo_values[7], -thermo_values[6]],
+                            [-thermo_values[7], -thermo_values[3], -thermo_values[5]],
+                            [-thermo_values[6], -thermo_values[5], -thermo_values[4]],
+                        ])
+                        stress = prism.tensor2_to_ase(pressure)
+                        stress = stress[[0, 1, 2, 1, 0, 0], [0, 1, 2, 2, 2, 1]]
+                        self.results = {
+                            "energy": convert(thermo_values[1], "energy", "metal", "ASE"),
+                            "free_energy": convert(thermo_values[1], "energy", "metal", "ASE"),
+                            "forces": convert(dump_atoms.get_forces(), "force", "metal", "ASE"),
+                            "stress": convert(stress, "pressure", "metal", "ASE"),
+                        }
+
+            return WindowsLAMMPSCalculator()
+
+        return lammpsrun.LAMMPS(
             command=command,
             files=files,
             specorder=[symbol],

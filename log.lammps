@@ -1,0 +1,5 @@
+LAMMPS (4 Jul 2026)
+OMP_NUM_THREADS environment is not set. Defaulting to 1 thread.
+  using 1 OpenMP thread(s) per MPI task
+Loaded 0 plugins from D:\LAMMPS\LAMMPS 64-bit 4Jul2026 with GUI\plugins
+Total wall time: 0:02:08
