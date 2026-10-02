@@ -1,60 +1,219 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QHBoxLayout, QComboBox, QPushButton, QGridLayout
-import matplotlib.pyplot as plt
+from PyQt5.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QGridLayout,
+    QLabel,
+    QComboBox,
+    QPushButton,
+    QCheckBox,
+    QGroupBox,
+)
+from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
+
 class PlotPanel(QWidget):
+    MATERIALS = ["Aluminum", "Copper", "Silicon"]
+    METHODS = ["MEAM", "MACE-MP", "DFT"]
+    LATTICES = {
+        "Aluminum": ["FCC", "BCC", "HCP"],
+        "Copper": ["FCC", "BCC", "HCP"],
+        "Silicon": ["Diamond cubic"],
+    }
+
     def __init__(self):
         super().__init__()
-
+        self.rows = []
         self.initUI()
 
     def initUI(self):
-        layout = QVBoxLayout()
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #1e1e1e;
+                color: #e6e6e6;
+                font-size: 14px;
+            }
+            QLabel#title {
+                font-size: 23px;
+                font-weight: bold;
+                padding: 6px 0;
+            }
+            QLabel.header {
+                color: #9cdcfe;
+                font-weight: bold;
+            }
+            QGroupBox {
+                border: 1px solid #454545;
+                border-radius: 6px;
+                margin-top: 12px;
+                padding: 12px;
+                font-weight: bold;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+            QComboBox, QPushButton {
+                background-color: #2d2d2d;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 7px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #2d2d2d;
+                selection-background-color: #094771;
+            }
+            QPushButton {
+                background-color: #0e639c;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #1177bb;
+            }
+            QCheckBox {
+                spacing: 8px;
+            }
+        """)
 
-        # Dropdowns for material selection
-        self.material_label = QLabel("Select Material:")
-        self.material_dropdown = QComboBox()
-        self.material_dropdown.addItems(["Silicon", "Copper", "Aluminum"])
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
 
-        # Dropdowns for lattice structure selection
-        self.lattice_label = QLabel("Select Lattice Structure:")
-        self.lattice_dropdown = QComboBox()
-        self.lattice_dropdown.addItems(["FCC", "BCC", "HCP", "Diamond"])
+        title = QLabel("Materials Properties Comparison")
+        title.setObjectName("title")
+        layout.addWidget(title)
 
-        # Dropdowns for method selection
-        self.method_label = QLabel("Select Method:")
-        self.method_dropdown = QComboBox()
-        self.method_dropdown.addItems(["MEAM", "MACE-MP", "DFT"])
+        config_box = QGroupBox("Simulation configurations")
+        grid = QGridLayout(config_box)
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(10)
 
-        # Button to generate plots
-        self.plot_button = QPushButton("Generate Plots")
-        self.plot_button.clicked.connect(self.generate_plots)
+        headers = ["Use", "Configuration", "Material", "Lattice structure", "Method"]
+        for column, text in enumerate(headers):
+            header = QLabel(text)
+            header.setProperty("class", "header")
+            header.setStyleSheet("color: #9cdcfe; font-weight: bold;")
+            grid.addWidget(header, 0, column)
 
-        # Layout for dropdowns
-        grid_layout = QGridLayout()
-        grid_layout.addWidget(self.material_label, 0, 0)
-        grid_layout.addWidget(self.material_dropdown, 0, 1)
-        grid_layout.addWidget(self.lattice_label, 1, 0)
-        grid_layout.addWidget(self.lattice_dropdown, 1, 1)
-        grid_layout.addWidget(self.method_label, 2, 0)
-        grid_layout.addWidget(self.method_dropdown, 2, 1)
-        grid_layout.addWidget(self.plot_button, 3, 0, 1, 2)
+        for index in range(3):
+            enabled = QCheckBox()
+            enabled.setChecked(index == 0)
 
-        layout.addLayout(grid_layout)
+            material = QComboBox()
+            material.addItems(self.MATERIALS)
 
-        # Output space for plots
-        self.figure = plt.figure()
+            lattice = QComboBox()
+            lattice.addItems(self.LATTICES[material.currentText()])
+
+            method = QComboBox()
+            method.addItems(self.METHODS)
+
+            grid.addWidget(enabled, index + 1, 0)
+            grid.addWidget(QLabel(f"Run {index + 1}"), index + 1, 1)
+            grid.addWidget(material, index + 1, 2)
+            grid.addWidget(lattice, index + 1, 3)
+            grid.addWidget(method, index + 1, 4)
+
+            enabled.toggled.connect(
+                lambda checked, widgets=(material, lattice, method):
+                    [widget.setEnabled(checked) for widget in widgets]
+            )
+            material.currentTextChanged.connect(
+                lambda value, dropdown=lattice: self.update_lattices(dropdown, value)
+            )
+
+            if index != 0:
+                material.setEnabled(False)
+                lattice.setEnabled(False)
+                method.setEnabled(False)
+
+            self.rows.append((enabled, material, lattice, method))
+
+        for column in (2, 3, 4):
+            grid.setColumnStretch(column, 1)
+
+        layout.addWidget(config_box)
+
+        self.compare_button = QPushButton("Compare selected configurations")
+        self.compare_button.clicked.connect(self.compare_runs)
+        layout.addWidget(self.compare_button)
+
+        results_box = QGroupBox("Results")
+        results_layout = QVBoxLayout(results_box)
+
+        self.status_label = QLabel(
+            "Select one or more configurations, then click Compare."
+        )
+        self.status_label.setWordWrap(True)
+        results_layout.addWidget(self.status_label)
+
+        self.figure = Figure(figsize=(10, 6), facecolor="#1e1e1e")
         self.canvas = FigureCanvas(self.figure)
-        layout.addWidget(self.canvas)
+        results_layout.addWidget(self.canvas)
 
-        self.setLayout(layout)
+        layout.addWidget(results_box, stretch=1)
+        self.show_empty_plots()
 
-    def generate_plots(self):
-        # Placeholder for plot generation logic
+    def update_lattices(self, dropdown, material):
+        previous_value = dropdown.currentText()
+        options = self.LATTICES[material]
+
+        dropdown.clear()
+        dropdown.addItems(options)
+
+        if previous_value in options:
+            dropdown.setCurrentText(previous_value)
+
+    def show_empty_plots(self, configurations=None):
         self.figure.clear()
-        ax = self.figure.add_subplot(111)
-        ax.plot([0, 1], [0, 1])  # Example plot
-        ax.set_title("Generated Plot")
-        ax.set_xlabel("X-axis")
-        ax.set_ylabel("Y-axis")
+
+        plot_titles = [
+            "Equation of state",
+            "Elastic constants",
+            "Surface energies",
+            "Derived properties",
+        ]
+
+        for index, title in enumerate(plot_titles, start=1):
+            ax = self.figure.add_subplot(2, 2, index)
+            ax.set_facecolor("#252526")
+            ax.set_title(title, color="#e6e6e6")
+            ax.tick_params(colors="#cccccc")
+            for spine in ax.spines.values():
+                spine.set_color("#777777")
+
+            if configurations:
+                message = "Simulation backend not connected"
+            else:
+                message = "Results will appear here"
+
+            ax.text(
+                0.5, 0.5, message,
+                color="#bbbbbb",
+                ha="center", va="center",
+                transform=ax.transAxes,
+                wrap=True,
+            )
+
+        self.figure.tight_layout()
         self.canvas.draw()
+
+    def compare_runs(self):
+        configurations = []
+
+        for index, (enabled, material, lattice, method) in enumerate(self.rows, start=1):
+            if enabled.isChecked():
+                configurations.append(
+                    f"Run {index}: {material.currentText()} / "
+                    f"{lattice.currentText()} / {method.currentText()}"
+                )
+
+        if not configurations:
+            self.status_label.setText("Enable at least one configuration to compare.")
+            self.show_empty_plots()
+            return
+
+        self.status_label.setText(
+            "Selected configurations:\n" + "\n".join(configurations)
+        )
+        self.show_empty_plots(configurations)
