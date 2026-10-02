@@ -78,12 +78,12 @@ class PlotPanel(QWidget):
 
     def initUI(self):
         rcParams.update({
-            "font.size": 30,
-            "axes.titlesize": 39,
-            "axes.labelsize": 30,
-            "xtick.labelsize": 27,
-            "ytick.labelsize": 27,
-            "legend.fontsize": 21,
+            "font.size": 20,
+            "axes.titlesize": 29,
+            "axes.labelsize": 20,
+            "xtick.labelsize": 17,
+            "ytick.labelsize": 17,
+            "legend.fontsize": 11,
         })
         self.setStyleSheet("""
             QWidget {
