@@ -1,5 +1,11 @@
 import sys
 import ctypes
+import importlib
+
+try:
+    importlib.import_module("torch")
+except (ImportError, OSError):
+    pass
 
 from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtWidgets import QApplication

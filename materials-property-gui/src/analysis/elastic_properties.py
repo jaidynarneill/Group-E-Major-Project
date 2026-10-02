@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -13,9 +14,83 @@ REFERENCE_LATTICE_PARAMETERS = {"Al": 4.05, "Cu": 3.615, "Si": 5.43}
 CRYSTAL_STRUCTURES = {
     "fcc": "fcc",
     "bcc": "bcc",
+    "dia": "diamond",
     "diamond": "diamond",
     "diamond cubic": "diamond",
+    "sc": "sc",
+    "simple cubic": "sc",
 }
+MEAM_LATTICE_NAMES = {
+    "fcc": "FCC",
+    "bcc": "BCC",
+    "dia": "Diamond cubic",
+    "sc": "Simple cubic",
+}
+ELEMENT_SYMBOLS = {
+    3: "Li", 6: "C", 11: "Na", 12: "Mg", 13: "Al", 14: "Si",
+    19: "K", 23: "V", 24: "Cr", 26: "Fe", 28: "Ni", 29: "Cu",
+    41: "Nb", 42: "Mo", 45: "Rh", 46: "Pd", 47: "Ag", 50: "Sn",
+    73: "Ta", 74: "W", 77: "Ir", 78: "Pt", 79: "Au", 82: "Pb", 83: "Bi",
+}
+ELEMENT_NAMES = {
+    "Li": "Lithium", "C": "Carbon", "Na": "Sodium", "Mg": "Magnesium",
+    "Al": "Aluminum", "Si": "Silicon", "K": "Potassium", "V": "Vanadium",
+    "Cr": "Chromium", "Fe": "Iron", "Ni": "Nickel", "Cu": "Copper",
+    "Nb": "Niobium", "Mo": "Molybdenum", "Rh": "Rhodium", "Pd": "Palladium",
+    "Ag": "Silver", "Sn": "Tin", "Ta": "Tantalum", "W": "Tungsten",
+    "Ir": "Iridium", "Pt": "Platinum", "Au": "Gold", "Pb": "Lead", "Bi": "Bismuth",
+}
+
+
+def load_meam_library_catalog():
+    """Read supported elemental cubic records from the bundled LAMMPS library."""
+    library_path = DATA_DIRECTORY / "potentials" / "library.meam"
+    if not library_path.is_file():
+        return {}
+
+    candidates = {}
+    lines = library_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    for index, line in enumerate(lines[:-1]):
+        match = re.match(r"\s*'([^']+)'\s+'([^']+)'\s+[\d.]+\s+(\d+)\s+[\d.]+", line)
+        if match is None:
+            continue
+
+        library_element, lattice_code, atomic_number_text = match.groups()
+        lattice_code = lattice_code.lower()
+        atomic_number = int(atomic_number_text)
+        symbol = ELEMENT_SYMBOLS.get(atomic_number)
+        if symbol is None or lattice_code not in MEAM_LATTICE_NAMES:
+            continue
+
+        parameter_values = lines[index + 1].split()
+        try:
+            lattice_parameter = float(parameter_values[5])
+        except (IndexError, ValueError):
+            continue
+        if lattice_parameter <= 0.0:
+            continue
+
+        candidates.setdefault(symbol, []).append({
+            "symbol": symbol,
+            "name": ELEMENT_NAMES[symbol],
+            "library_element": library_element,
+            "lattice": CRYSTAL_STRUCTURES[lattice_code],
+            "lattice_name": MEAM_LATTICE_NAMES[lattice_code],
+            "lattice_parameter": lattice_parameter,
+            "atomic_number": atomic_number,
+        })
+
+    catalog = {}
+    for symbol, records in sorted(candidates.items(), key=lambda item: item[1][0]["atomic_number"]):
+        canonical_records = [record for record in records if record["library_element"] == symbol]
+        catalog[symbol] = canonical_records[0] if canonical_records else records[0]
+    return catalog
+
+
+MEAM_CATALOG = load_meam_library_catalog()
+REFERENCE_LATTICE_PARAMETERS.update({
+    symbol: record["lattice_parameter"] for symbol, record in MEAM_CATALOG.items()
+})
 
 
 def birch_murnaghan(volume, energy0, volume0, bulk_modulus, bulk_modulus_prime):
@@ -84,6 +159,9 @@ def _normalize_material(material):
         "si": ("Silicon", "Si"),
         "silicon": ("Silicon", "Si"),
     }
+    for symbol, record in MEAM_CATALOG.items():
+        materials[symbol.lower()] = (record["name"], symbol)
+        materials[record["name"].lower()] = (record["name"], symbol)
     try:
         return materials[key]
     except KeyError as error:
@@ -131,6 +209,7 @@ def _create_calculator(
     meam_library,
     meam_parameter_file,
     meam_pair_coeff,
+    meam_library_element,
     dft_pseudo_dir,
     dft_pseudopotential,
     espresso_command,
@@ -148,21 +227,12 @@ def _create_calculator(
 
     if method == "MEAM":
         library = _find_meam_file(meam_library, "MEAM_LIBRARY", "library*.meam")
-        parameter = _find_meam_file(
-            meam_parameter_file,
-            "MEAM_PARAMETER_FILE",
-            f"*{symbol}*.meam",
-        )
+        parameter = _find_meam_file(meam_parameter_file, "MEAM_PARAMETER_FILE", f"*{symbol}*.meam")
         custom_pair_coeff = meam_pair_coeff or os.getenv("MEAM_PAIR_COEFF")
         if library is None:
             raise FileNotFoundError(
                 "MEAM library file not found. Set MEAM_LIBRARY or place library.meam "
                 "under src/data/potentials/."
-            )
-        if parameter is None and not custom_pair_coeff:
-            raise FileNotFoundError(
-                f"MEAM parameter file for {symbol} not found. Set MEAM_PARAMETER_FILE, "
-                "or set MEAM_PAIR_COEFF for a potential that does not use a parameter file."
             )
         command = lammps_command or os.getenv("LAMMPS_COMMAND", "lmp")
         if not shutil.which(command) and not Path(command).is_file():
@@ -177,14 +247,19 @@ def _create_calculator(
             raise RuntimeError("MEAM calculations require ASE; install it with 'python -m pip install ase'.") from error
 
         files = [str(library)] + ([str(parameter)] if parameter else [])
+        library_element = meam_library_element or MEAM_CATALOG.get(
+            symbol, {"library_element": symbol}
+        )["library_element"]
         if custom_pair_coeff:
             pair_coeff = custom_pair_coeff.format(
                 library=library.name,
                 parameter=parameter.name if parameter else "NULL",
                 element=symbol,
             )
+        elif parameter:
+            pair_coeff = f"* * {library.name} {library_element} {parameter.name} {symbol}"
         else:
-            pair_coeff = f"* * {library.name} {symbol} {parameter.name} {symbol}"
+            pair_coeff = f"* * {library.name} {library_element} NULL {library_element}"
         return LAMMPS(
             command=command,
             files=files,
@@ -272,6 +347,7 @@ def compute_elastic_properties(
     meam_library=None,
     meam_parameter_file=None,
     meam_pair_coeff=None,
+    meam_library_element=None,
     dft_pseudo_dir=None,
     dft_pseudopotential=None,
     espresso_command=None,
@@ -300,6 +376,7 @@ def compute_elastic_properties(
             meam_library,
             meam_parameter_file,
             meam_pair_coeff,
+            meam_library_element,
             dft_pseudo_dir,
             dft_pseudopotential,
             espresso_command,

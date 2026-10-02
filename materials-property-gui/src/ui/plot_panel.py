@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (
     QGroupBox,
 )
 from PyQt5.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
+from matplotlib import rcParams
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import numpy as np
@@ -16,6 +17,7 @@ import numpy as np
 try:
     from analysis.elastic_properties import (
         EV_A3_TO_GPA,
+        MEAM_CATALOG,
         birch_murnaghan,
         compute_elastic_properties,
     )
@@ -24,6 +26,7 @@ except ModuleNotFoundError as error:
         raise
     from src.analysis.elastic_properties import (
         EV_A3_TO_GPA,
+        MEAM_CATALOG,
         birch_murnaghan,
         compute_elastic_properties,
     )
@@ -57,13 +60,14 @@ class CalculationWorker(QObject):
 
 
 class PlotPanel(QWidget):
-    MATERIALS = ["Aluminum", "Copper", "Silicon"]
+    MATERIALS = [record["name"] for record in MEAM_CATALOG.values()]
+    MATERIAL_SYMBOLS = {record["name"]: symbol for symbol, record in MEAM_CATALOG.items()}
     METHODS = ["MACE-MP", "MEAM", "DFT"]
     LATTICES = {
-        "Aluminum": ["FCC", "BCC"],
-        "Copper": ["FCC", "BCC"],
-        "Silicon": ["Diamond cubic"],
+        record["name"]: [record["lattice_name"]]
+        for record in MEAM_CATALOG.values()
     }
+    DEFAULT_MATERIALS = ["Aluminum", "Copper", "Silicon"]
 
     def __init__(self):
         super().__init__()
@@ -73,26 +77,35 @@ class PlotPanel(QWidget):
         self.initUI()
 
     def initUI(self):
+        rcParams.update({
+            "font.size": 30,
+            "axes.titlesize": 39,
+            "axes.labelsize": 30,
+            "xtick.labelsize": 27,
+            "ytick.labelsize": 27,
+            "legend.fontsize": 21,
+        })
         self.setStyleSheet("""
             QWidget {
                 background-color: #1e1e1e;
                 color: #e6e6e6;
-                font-size: 14px;
+                font-size: 42px;
             }
             QLabel#title {
-                font-size: 23px;
+                font-size: 69px;
                 font-weight: bold;
-                padding: 6px 0;
+                padding: 18px 0;
             }
             QLabel.header {
                 color: #9cdcfe;
                 font-weight: bold;
+                font-size: 42px;
             }
             QGroupBox {
                 border: 1px solid #454545;
                 border-radius: 6px;
-                margin-top: 12px;
-                padding: 12px;
+                margin-top: 40px;
+                padding: 36px;
                 font-weight: bold;
             }
             QGroupBox::title {
@@ -104,7 +117,7 @@ class PlotPanel(QWidget):
                 background-color: #2d2d2d;
                 border: 1px solid #555;
                 border-radius: 4px;
-                padding: 7px;
+                padding: 14px;
             }
             QComboBox QAbstractItemView {
                 background-color: #2d2d2d;
@@ -138,7 +151,7 @@ class PlotPanel(QWidget):
         for column, text in enumerate(headers):
             header = QLabel(text)
             header.setProperty("class", "header")
-            header.setStyleSheet("color: #9cdcfe; font-weight: bold;")
+            header.setStyleSheet("color: #9cdcfe; font-weight: bold; font-size: 42px;")
             grid.addWidget(header, 0, column)
 
         for index in range(3):
@@ -147,19 +160,14 @@ class PlotPanel(QWidget):
 
             material = QComboBox()
             material.addItems(self.MATERIALS)
+            if index < len(self.DEFAULT_MATERIALS):
+                material.setCurrentText(self.DEFAULT_MATERIALS[index])
 
             lattice = QComboBox()
             lattice.addItems(self.LATTICES[material.currentText()])
 
             method = QComboBox()
             method.addItems(self.METHODS)
-
-            if index == 1:
-                material.setCurrentText("Copper")
-            elif index == 2:
-                material.setCurrentText("Silicon")
-                lattice.clear()
-                lattice.addItems(self.LATTICES["Silicon"])
 
             grid.addWidget(enabled, index + 1, 0)
             grid.addWidget(QLabel(f"Run {index + 1}"), index + 1, 1)
@@ -243,7 +251,9 @@ class PlotPanel(QWidget):
                 wrap=True,
             )
 
-        self.figure.tight_layout()
+        self.figure.subplots_adjust(
+            left=0.16, right=0.98, bottom=0.17, top=0.90, wspace=0.38, hspace=0.52
+        )
         self.canvas.draw()
 
     def run_calculations(self):
@@ -304,7 +314,9 @@ class PlotPanel(QWidget):
         if errors:
             summaries.append("Failed runs: " + " | ".join(errors))
         self.status_label.setText("\n".join(summaries))
-        self.figure.tight_layout()
+        self.figure.subplots_adjust(
+            left=0.16, right=0.98, bottom=0.17, top=0.90, wspace=0.38, hspace=0.52
+        )
         self.canvas.draw()
 
     def _new_axis(self, position, title, xlabel, ylabel):
@@ -336,7 +348,7 @@ class PlotPanel(QWidget):
                 result["B_prime"],
             ) / atoms_per_cell
             axis.plot(fit_volume, fit_energy, color=color, label=f"{label} fit")
-        axis.legend(fontsize=7)
+        axis.legend(fontsize=14)
 
     def _plot_stress_strain(self, results):
         axis = self._new_axis(2, "Stress-strain response", "Strain", "Stress (GPa)")
@@ -360,7 +372,7 @@ class PlotPanel(QWidget):
                     linestyle=linestyle,
                     label=f"{label} {component}",
                 )
-        axis.legend(fontsize=7, ncol=2)
+        axis.legend(fontsize=14, ncol=2)
 
     def _plot_elastic_constants(self, results):
         axis = self._new_axis(3, "Elastic constants", "Elastic constant", "Value (GPa)")
@@ -372,7 +384,7 @@ class PlotPanel(QWidget):
             values = [result[name] for name in names]
             axis.bar(positions + offset, values, width=width, label=label)
         axis.set_xticks(positions, names)
-        axis.legend(fontsize=7)
+        axis.legend(fontsize=14)
 
     def _plot_surface_energy_placeholder(self):
         axis = self._new_axis(4, "Surface energies", "", "")

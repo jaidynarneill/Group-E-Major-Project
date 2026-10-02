@@ -1,10 +1,9 @@
 import unittest
-from src.analysis.elastic_properties import calculate_elastic_properties
-import unittest
 
 import numpy as np
 
 from src.analysis.elastic_properties import (
+    MEAM_CATALOG,
     birch_murnaghan,
     derive_cubic_properties,
     fit_linear_response,
@@ -12,6 +11,13 @@ from src.analysis.elastic_properties import (
 
 
 class TestElasticProperties(unittest.TestCase):
+    def test_meam_catalog_contains_cubic_material_records(self):
+        self.assertEqual(MEAM_CATALOG["Al"]["library_element"], "Al")
+        self.assertEqual(MEAM_CATALOG["Cu"]["lattice"], "fcc")
+        self.assertEqual(MEAM_CATALOG["Si"]["lattice"], "diamond")
+        self.assertIn("Bi", MEAM_CATALOG)
+        self.assertNotIn("Mg", MEAM_CATALOG)
+
     def test_birch_murnaghan_returns_equilibrium_energy_at_v0(self):
         energy = birch_murnaghan(16.0, -3.0, 16.0, 0.5, 4.0)
         self.assertAlmostEqual(energy, -3.0)
