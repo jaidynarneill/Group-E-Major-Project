@@ -5,6 +5,7 @@ import numpy as np
 
 from src.analysis.elastic_properties import (
     MEAM_CATALOG,
+    MACE_MODEL_OPTIONS,
     birch_murnaghan,
     create_calculator,
     derive_cubic_properties,
@@ -38,6 +39,12 @@ class TestElasticProperties(unittest.TestCase):
         self.assertGreater(properties["G_H"], 0.0)
         self.assertGreater(properties["E"], 0.0)
         self.assertGreater(properties["A"], 0.0)
+
+    def test_mace_variants_select_the_requested_checkpoint(self):
+        for method, model in MACE_MODEL_OPTIONS.items():
+            with self.subTest(method=method), patch("mace.calculators.mace_mp") as mace_mp:
+                create_calculator("Aluminum", method)
+                mace_mp.assert_called_once_with(model=model, default_dtype="float64")
 
     def test_dft_calculator_uses_bundled_sssp_pseudopotential_and_cutoffs(self):
         with patch("src.analysis.elastic_properties.shutil.which", return_value="pw.x"):

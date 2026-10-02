@@ -47,6 +47,20 @@ ELEMENT_NAMES = {
     "Ag": "Silver", "Sn": "Tin", "Ta": "Tantalum", "W": "Tungsten",
     "Ir": "Iridium", "Pt": "Platinum", "Au": "Gold", "Pb": "Lead", "Bi": "Bismuth",
 }
+MACE_MODEL_OPTIONS = {
+    "MACE-MP Small": "small",
+    "MACE-MP Medium": "medium",
+    "MACE-MP Large": "large",
+    "MACE-MPA": "medium-mpa-0",
+}
+
+
+def mace_model_for_method(method, default="small"):
+    key = re.sub(r"[\s_]+", "-", str(method).strip().upper())
+    for label, model_name in MACE_MODEL_OPTIONS.items():
+        if key == re.sub(r"[\s_]+", "-", label.upper()):
+            return model_name
+    return default
 
 
 def load_meam_library_catalog():
@@ -188,8 +202,14 @@ def _normalize_structure(lattice_structure):
 
 
 def _normalize_method(method):
-    key = str(method).strip().upper().replace("_", "-")
-    aliases = {"MACE": "MACE-MP", "MACE-MP": "MACE-MP", "MEAM": "MEAM", "DFT": "DFT"}
+    key = re.sub(r"[\s_]+", "-", str(method).strip().upper())
+    mace_methods = {
+        "MACE", "MACE-MP", "MACE-MP-SMALL", "MACE-MP-MEDIUM",
+        "MACE-MP-LARGE", "MACE-MPA",
+    }
+    if key in mace_methods:
+        return "MACE-MP"
+    aliases = {"MEAM": "MEAM", "DFT": "DFT"}
     try:
         return aliases[key]
     except KeyError as error:
@@ -498,6 +518,8 @@ def compute_elastic_properties(
     material_name, symbol = _normalize_material(material)
     crystal_structure = _normalize_structure(lattice_structure)
     method_name = _normalize_method(method)
+    if method_name == "MACE-MP":
+        model = mace_model_for_method(method, model)
 
     try:
         from ase.build import bulk
@@ -643,6 +665,8 @@ def create_calculator(
     """Create the requested ASE calculator for reuse across related calculations."""
     _, symbol = _normalize_material(material)
     method_name = _normalize_method(method)
+    if method_name == "MACE-MP":
+        model = mace_model_for_method(method, model)
     return _create_calculator(
         method_name,
         symbol,

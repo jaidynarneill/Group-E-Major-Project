@@ -20,9 +20,11 @@ try:
     from analysis.elastic_properties import (
         EV_A3_TO_GPA,
         MEAM_CATALOG,
+        MACE_MODEL_OPTIONS,
         birch_murnaghan,
         create_calculator,
         compute_elastic_properties,
+        mace_model_for_method,
     )
     from analysis.surface_energy import compute_surface_energies
 except ModuleNotFoundError as error:
@@ -31,9 +33,11 @@ except ModuleNotFoundError as error:
     from src.analysis.elastic_properties import (
         EV_A3_TO_GPA,
         MEAM_CATALOG,
+        MACE_MODEL_OPTIONS,
         birch_murnaghan,
         create_calculator,
         compute_elastic_properties,
+        mace_model_for_method,
     )
     from src.analysis.surface_energy import compute_surface_energies
 
@@ -56,11 +60,13 @@ class CalculationWorker(QObject):
                 label = f"Run {run_number}: {material} / {lattice} / {method}"
                 self.progress.emit(f"Calculating {label}...")
                 try:
-                    calculator = create_calculator(material, method)
+                    model = mace_model_for_method(method)
+                    calculator = create_calculator(material, method, model=model)
                     result = compute_elastic_properties(
                         material,
                         lattice,
                         method,
+                        model=model,
                         calculator=calculator,
                     )
                     try:
@@ -71,6 +77,7 @@ class CalculationWorker(QObject):
                             calculator=calculator,
                             bulk_energy_per_atom=result["E0_atom"],
                             lattice_parameter=result["a0"],
+                            model=model,
                         )
                     except Exception as error:
                         result["surface_energy_data"] = {"surfaces": []}
@@ -86,7 +93,7 @@ class CalculationWorker(QObject):
 class PlotPanel(QWidget):
     MATERIALS = [record["name"] for record in MEAM_CATALOG.values()]
     MATERIAL_SYMBOLS = {record["name"]: symbol for symbol, record in MEAM_CATALOG.items()}
-    METHODS = ["MACE-MP", "MEAM", "DFT"]
+    METHODS = [*MACE_MODEL_OPTIONS, "MEAM", "DFT"]
     LATTICES = {
         record["name"]: [record["lattice_name"]]
         for record in MEAM_CATALOG.values()
