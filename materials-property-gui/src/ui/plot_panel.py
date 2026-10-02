@@ -11,8 +11,9 @@ from PyQt5.QtWidgets import (
     QScrollArea,
     QPlainTextEdit,
     QApplication,
+    QSplitter,
 )
-from PyQt5.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
+from PyQt5.QtCore import QObject, QThread, Qt, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QColor, QPalette
 from matplotlib import rcParams
 from matplotlib.figure import Figure
@@ -207,19 +208,25 @@ class PlotPanel(QWidget):
         self.result_output = QPlainTextEdit()
         self.result_output.setReadOnly(True)
         self.result_output.setPlaceholderText("Per-run calculation details will appear here.")
-        self.result_output.setMinimumHeight(210)
-        self.result_output.setMaximumHeight(340)
+        self.result_output.setMinimumHeight(120)
         self.result_output.setStyleSheet("QPlainTextEdit { font-size: 18px; }")
-        results_layout.addWidget(self.result_output)
 
         self.figure = Figure(figsize=(13, 23), facecolor="#1e1e1e")
         self.canvas = FigureCanvas(self.figure)
         self.canvas.setMinimumSize(1300, 2300)
         self.output_scroll = QScrollArea()
         self.output_scroll.setWidgetResizable(True)
-        self.output_scroll.setMinimumHeight(650)
+        self.output_scroll.setMinimumHeight(250)
         self.output_scroll.setWidget(self.canvas)
-        results_layout.addWidget(self.output_scroll, stretch=1)
+
+        self.output_splitter = QSplitter(Qt.Vertical)
+        self.output_splitter.setHandleWidth(8)
+        self.output_splitter.addWidget(self.result_output)
+        self.output_splitter.addWidget(self.output_scroll)
+        self.output_splitter.setStretchFactor(0, 0)
+        self.output_splitter.setStretchFactor(1, 1)
+        self.output_splitter.setSizes([280, 900])
+        results_layout.addWidget(self.output_splitter, stretch=1)
 
         layout.addWidget(results_box, stretch=1)
         self.apply_theme(self.theme_selector.currentText())
@@ -542,12 +549,12 @@ class PlotPanel(QWidget):
     def _plot_elastic_constants(self, results):
         axis = self._new_axis(3, "Elastic Constants", "Elastic Constant", "Value (GPa)")
         axis.grid(False)
-        names = ["C11", "C12", "C44"]
+        names = ["C11", "C12", "C44", "B (Elastic)"]
         positions = np.arange(len(names))
         width = 0.8 / len(results)
         for index, (label, result) in enumerate(results):
             offset = (index - (len(results) - 1) / 2.0) * width
-            values = [result[name] for name in names]
+            values = [result["C11"], result["C12"], result["C44"], result["B_Cij"]]
             axis.bar(positions + offset, values, width=width, label=label)
         axis.set_xticks(positions, names)
         axis.legend(fontsize=14)
