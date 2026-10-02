@@ -409,19 +409,58 @@ class PlotPanel(QWidget):
         summaries = []
         for label, result in results:
             run_name = label.split(":", 1)[0]
+            c11 = result["C11"]
+            c12 = result["C12"]
+            c44 = result["C44"]
+            eos_bulk_modulus = result["B_EOS"]
+            elastic_bulk_modulus = result["B_Cij"]
+            bulk_difference = elastic_bulk_modulus - eos_bulk_modulus
+            bulk_difference_percent = (
+                abs(bulk_difference) / abs(eos_bulk_modulus) * 100.0
+                if eos_bulk_modulus != 0.0
+                else float("inf")
+            )
+            stiffness_matrix = np.array([
+                [c11, c12, c12, 0.0, 0.0, 0.0],
+                [c12, c11, c12, 0.0, 0.0, 0.0],
+                [c12, c12, c11, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, c44, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0, c44, 0.0],
+                [0.0, 0.0, 0.0, 0.0, 0.0, c44],
+            ])
             summaries.extend([
                 f"{run_name}: {result['material']} | {result['lattice_structure']} | {result['method']}",
-                "  Equation Of State",
-                f"    a0 = {result['a0']:.5f} Å   V0 = {result['V0']:.5f} Å³/cell",
-                f"    E0 = {result['E0_atom']:.7f} eV/atom   B(EOS) = {result['B_EOS']:.3f} GPa   B' = {result['B_prime']:.4f}",
-                "  Elastic Constants",
-                f"    C11 = {result['C11']:.3f} GPa   C12 = {result['C12']:.3f} GPa   C44 = {result['C44']:.3f} GPa",
-                f"    R²(C11/C12/C44) = {result['R2_C11']:.6f} / {result['R2_C12']:.6f} / {result['R2_C44']:.6f}",
-                "  Derived Polycrystalline Properties",
-                f"    B = {result['B_Cij']:.3f} GPa   G(V/R/H) = {result['G_V']:.3f} / {result['G_R']:.3f} / {result['G_H']:.3f} GPa",
-                f"    Young's E = {result['E']:.3f} GPa   Poisson's nu = {result['nu']:.5f}   Zener A = {result['A']:.5f}",
-                "  Surface Energies",
+                "  EOS:",
+                f"    Equilibrium volume = {result['V0']:.4f} Angstrom^3",
+                f"    Equilibrium energy = {result['E0_atom'] * result['atoms_per_cell']:.6f} eV",
+                f"    Bulk modulus       = {eos_bulk_modulus:.3f} GPa",
+                f"    B'                 = {result['B_prime']:.3f}",
+                "  Elastic constants:",
+                f"    C11 = {c11:.3f} GPa",
+                f"    C12 = {c12:.3f} GPa",
+                f"    C44 = {c44:.3f} GPa",
+                "  Linear fit R^2:",
+                f"    C11 fit = {result['R2_C11']:.8f}",
+                f"    C12 fit = {result['R2_C12']:.8f}",
+                f"    C44 fit = {result['R2_C44']:.8f}",
+                "  Bulk modulus:",
+                f"    From elastic constants = {elastic_bulk_modulus:.3f} GPa",
+                f"    From EOS               = {eos_bulk_modulus:.3f} GPa",
+                f"    Difference             = {bulk_difference:.3f} GPa",
+                f"    Difference             = {bulk_difference_percent:.2f}%",
+                "  Polycrystalline properties:",
+                f"    Voigt shear modulus = {result['G_V']:.3f} GPa",
+                f"    Reuss shear modulus = {result['G_R']:.3f} GPa",
+                f"    Hill shear modulus  = {result['G_H']:.3f} GPa",
+                f"    Young's modulus     = {result['E']:.3f} GPa",
+                f"    Poisson's ratio     = {result['nu']:.4f}",
+                "  Stiffness matrix [GPa]:",
             ])
+            summaries.extend(
+                "    " + " ".join(f"{value:.3f}" for value in row)
+                for row in stiffness_matrix
+            )
+            summaries.append("  Surface energies:")
             surfaces = result.get("surface_energy_data", {}).get("surfaces", [])
             if surfaces:
                 for surface_result in surfaces:
@@ -436,7 +475,9 @@ class PlotPanel(QWidget):
         if errors:
             summaries.extend(["Run Errors", *[f"  {error}" for error in errors]])
         self.status_label.setText("Run completed." if not errors else "Run completed with errors.")
-        self.result_output.setPlainText("\n".join(summaries))
+        report = "\n".join(summaries)
+        self.result_output.setPlainText(report)
+        print(report)
         self.figure.subplots_adjust(
             left=0.13, right=0.98, bottom=0.12, top=0.96, wspace=0.32, hspace=0.40
         )
@@ -500,6 +541,7 @@ class PlotPanel(QWidget):
 
     def _plot_elastic_constants(self, results):
         axis = self._new_axis(3, "Elastic Constants", "Elastic Constant", "Value (GPa)")
+        axis.grid(False)
         names = ["C11", "C12", "C44"]
         positions = np.arange(len(names))
         width = 0.8 / len(results)
@@ -512,6 +554,7 @@ class PlotPanel(QWidget):
 
     def _plot_surface_energies(self, results):
         axis = self._new_axis(4, "Surface Energies", "Surface Orientation", "Energy (eV/Å²)")
+        axis.grid(False)
         available = [
             (label, result, result.get("surface_energy_data", {}).get("surfaces", []))
             for label, result in results
