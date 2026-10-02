@@ -549,7 +549,7 @@ class PlotPanel(QWidget):
     def _plot_elastic_constants(self, results):
         axis = self._new_axis(3, "Elastic Constants", "Elastic Constant", "Value (GPa)")
         axis.grid(False)
-        names = ["C11", "C12", "C44", "B (Elastic)"]
+        names = ["C11", "C12", "C44", "Bulk Modulus"]
         positions = np.arange(len(names))
         width = 0.8 / len(results)
         for index, (label, result) in enumerate(results):
