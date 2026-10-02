@@ -8,22 +8,68 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QGroupBox,
 )
+from PyQt5.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+import numpy as np
+
+try:
+    from analysis.elastic_properties import (
+        EV_A3_TO_GPA,
+        birch_murnaghan,
+        compute_elastic_properties,
+    )
+except ModuleNotFoundError as error:
+    if error.name != "analysis":
+        raise
+    from src.analysis.elastic_properties import (
+        EV_A3_TO_GPA,
+        birch_murnaghan,
+        compute_elastic_properties,
+    )
+
+
+class CalculationWorker(QObject):
+    progress = pyqtSignal(str)
+    completed = pyqtSignal(object, object)
+    finished = pyqtSignal()
+
+    def __init__(self, configurations):
+        super().__init__()
+        self.configurations = configurations
+
+    @pyqtSlot()
+    def run(self):
+        results = []
+        errors = []
+        try:
+            for run_number, material, lattice, method in self.configurations:
+                label = f"Run {run_number}: {material} / {lattice} / {method}"
+                self.progress.emit(f"Calculating {label}...")
+                try:
+                    result = compute_elastic_properties(material, lattice, method)
+                    results.append((label, result))
+                except Exception as error:
+                    errors.append(f"{label}: {error}")
+            self.completed.emit(results, errors)
+        finally:
+            self.finished.emit()
 
 
 class PlotPanel(QWidget):
     MATERIALS = ["Aluminum", "Copper", "Silicon"]
-    METHODS = ["MEAM", "MACE-MP", "DFT"]
+    METHODS = ["MACE-MP", "MEAM", "DFT"]
     LATTICES = {
-        "Aluminum": ["FCC", "BCC", "HCP"],
-        "Copper": ["FCC", "BCC", "HCP"],
+        "Aluminum": ["FCC", "BCC"],
+        "Copper": ["FCC", "BCC"],
         "Silicon": ["Diamond cubic"],
     }
 
     def __init__(self):
         super().__init__()
         self.rows = []
+        self._thread = None
+        self._worker = None
         self.initUI()
 
     def initUI(self):
@@ -108,6 +154,13 @@ class PlotPanel(QWidget):
             method = QComboBox()
             method.addItems(self.METHODS)
 
+            if index == 1:
+                material.setCurrentText("Copper")
+            elif index == 2:
+                material.setCurrentText("Silicon")
+                lattice.clear()
+                lattice.addItems(self.LATTICES["Silicon"])
+
             grid.addWidget(enabled, index + 1, 0)
             grid.addWidget(QLabel(f"Run {index + 1}"), index + 1, 1)
             grid.addWidget(material, index + 1, 2)
@@ -134,15 +187,15 @@ class PlotPanel(QWidget):
 
         layout.addWidget(config_box)
 
-        self.compare_button = QPushButton("Compare selected configurations")
-        self.compare_button.clicked.connect(self.compare_runs)
-        layout.addWidget(self.compare_button)
+        self.run_button = QPushButton("Run")
+        self.run_button.clicked.connect(self.run_calculations)
+        layout.addWidget(self.run_button)
 
         results_box = QGroupBox("Results")
         results_layout = QVBoxLayout(results_box)
 
         self.status_label = QLabel(
-            "Select one or more configurations, then click Compare."
+            "Select configurations and click Run. Surface-energy calculations are not connected."
         )
         self.status_label.setWordWrap(True)
         results_layout.addWidget(self.status_label)
@@ -164,14 +217,14 @@ class PlotPanel(QWidget):
         if previous_value in options:
             dropdown.setCurrentText(previous_value)
 
-    def show_empty_plots(self, configurations=None):
+    def show_empty_plots(self, message="Run a configuration to calculate plots."):
         self.figure.clear()
 
         plot_titles = [
             "Equation of state",
+            "Stress-strain response",
             "Elastic constants",
             "Surface energies",
-            "Derived properties",
         ]
 
         for index, title in enumerate(plot_titles, start=1):
@@ -181,11 +234,6 @@ class PlotPanel(QWidget):
             ax.tick_params(colors="#cccccc")
             for spine in ax.spines.values():
                 spine.set_color("#777777")
-
-            if configurations:
-                message = "Simulation backend not connected"
-            else:
-                message = "Results will appear here"
 
             ax.text(
                 0.5, 0.5, message,
@@ -198,22 +246,144 @@ class PlotPanel(QWidget):
         self.figure.tight_layout()
         self.canvas.draw()
 
-    def compare_runs(self):
+    def run_calculations(self):
         configurations = []
 
         for index, (enabled, material, lattice, method) in enumerate(self.rows, start=1):
             if enabled.isChecked():
-                configurations.append(
-                    f"Run {index}: {material.currentText()} / "
-                    f"{lattice.currentText()} / {method.currentText()}"
-                )
+                configurations.append((
+                    index,
+                    material.currentText(),
+                    lattice.currentText(),
+                    method.currentText(),
+                ))
 
         if not configurations:
-            self.status_label.setText("Enable at least one configuration to compare.")
-            self.show_empty_plots()
+            self.status_label.setText("Enable at least one configuration before running.")
             return
 
-        self.status_label.setText(
-            "Selected configurations:\n" + "\n".join(configurations)
+        self.run_button.setEnabled(False)
+        self.status_label.setText("Starting calculations...")
+
+        self._thread = QThread(self)
+        self._worker = CalculationWorker(configurations)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.progress.connect(self.status_label.setText)
+        self._worker.completed.connect(self.show_results)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.finished.connect(self._worker.deleteLater)
+        self._thread.finished.connect(self._finish_run)
+        self._thread.finished.connect(self._thread.deleteLater)
+        self._thread.start()
+
+    def _finish_run(self):
+        self.run_button.setEnabled(True)
+        self._worker = None
+        self._thread = None
+
+    def show_results(self, results, errors):
+        if not results:
+            message = "No calculations completed. " + "\n".join(errors)
+            self.status_label.setText(message)
+            self.show_empty_plots("No calculation data available")
+            return
+
+        self._plot_eos(results)
+        self._plot_stress_strain(results)
+        self._plot_elastic_constants(results)
+        self._plot_surface_energy_placeholder()
+        summaries = []
+        for label, result in results:
+            summaries.append(
+                f"{label}: a0={result['a0']:.4f} Å, B(EOS)={result['B_EOS']:.2f} GPa, "
+                f"C11={result['C11']:.2f}, C12={result['C12']:.2f}, "
+                f"C44={result['C44']:.2f}, E={result['E']:.2f} GPa, nu={result['nu']:.4f}"
+            )
+        summaries.append("Surface energies are not plotted: the surface-energy module is still a placeholder.")
+        if errors:
+            summaries.append("Failed runs: " + " | ".join(errors))
+        self.status_label.setText("\n".join(summaries))
+        self.figure.tight_layout()
+        self.canvas.draw()
+
+    def _new_axis(self, position, title, xlabel, ylabel):
+        axis = self.figure.add_subplot(2, 2, position)
+        axis.set_facecolor("#252526")
+        axis.set_title(title, color="#e6e6e6")
+        axis.set_xlabel(xlabel, color="#cccccc")
+        axis.set_ylabel(ylabel, color="#cccccc")
+        axis.tick_params(colors="#cccccc")
+        axis.grid(color="#555555", alpha=0.35)
+        for spine in axis.spines.values():
+            spine.set_color("#777777")
+        return axis
+
+    def _plot_eos(self, results):
+        self.figure.clear()
+        axis = self._new_axis(1, "Equation of state", "Volume (Å³/cell)", "Energy (eV/atom)")
+        for index, (label, result) in enumerate(results):
+            data = result["eos_data"]
+            color = f"C{index % 10}"
+            axis.scatter(data["volume"], data["energy_per_atom"], color=color, label=f"{label} data")
+            fit_volume = np.linspace(data["volume"].min(), data["volume"].max(), 200)
+            atoms_per_cell = result["atoms_per_cell"]
+            fit_energy = birch_murnaghan(
+                fit_volume,
+                result["E0_atom"] * atoms_per_cell,
+                result["V0"],
+                result["B_EOS"] / EV_A3_TO_GPA,
+                result["B_prime"],
+            ) / atoms_per_cell
+            axis.plot(fit_volume, fit_energy, color=color, label=f"{label} fit")
+        axis.legend(fontsize=7)
+
+    def _plot_stress_strain(self, results):
+        axis = self._new_axis(2, "Stress-strain response", "Strain", "Stress (GPa)")
+        components = [
+            ("sigma_xx_GPa", "C11", "-"),
+            ("sigma_yy_GPa", "C12", "--"),
+            ("sigma_xy_GPa", "C44", ":"),
+        ]
+        for index, (label, result) in enumerate(results):
+            data = result["elastic_data"]
+            strain = data["strain"]
+            color = f"C{index % 10}"
+            for key, component, linestyle in components:
+                stress = data[key]
+                fit = np.polyfit(strain, stress, 1)
+                axis.scatter(strain, stress, color=color, s=12)
+                axis.plot(
+                    strain,
+                    np.polyval(fit, strain),
+                    color=color,
+                    linestyle=linestyle,
+                    label=f"{label} {component}",
+                )
+        axis.legend(fontsize=7, ncol=2)
+
+    def _plot_elastic_constants(self, results):
+        axis = self._new_axis(3, "Elastic constants", "Elastic constant", "Value (GPa)")
+        names = ["C11", "C12", "C44"]
+        positions = np.arange(len(names))
+        width = 0.8 / len(results)
+        for index, (label, result) in enumerate(results):
+            offset = (index - (len(results) - 1) / 2.0) * width
+            values = [result[name] for name in names]
+            axis.bar(positions + offset, values, width=width, label=label)
+        axis.set_xticks(positions, names)
+        axis.legend(fontsize=7)
+
+    def _plot_surface_energy_placeholder(self):
+        axis = self._new_axis(4, "Surface energies", "", "")
+        axis.set_axis_off()
+        axis.text(
+            0.5,
+            0.5,
+            "Surface-energy backend is not implemented.\nPlaceholder values are not plotted.",
+            color="#bbbbbb",
+            ha="center",
+            va="center",
+            transform=axis.transAxes,
+            wrap=True,
         )
-        self.show_empty_plots(configurations)
