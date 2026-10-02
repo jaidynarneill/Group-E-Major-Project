@@ -57,8 +57,6 @@ def main():
     app = QApplication(sys.argv)
     app.setStyleSheet(DARK_THEME)
 
-    window = MainWindow()
-
 
     sys.exit(app.exec_())
 
