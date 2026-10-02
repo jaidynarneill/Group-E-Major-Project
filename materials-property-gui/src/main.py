@@ -6,7 +6,7 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     window = MainWindow()
-    window.showFullScreen()
+    #window.showFullScreen()
     sys.exit(app.exec_())
 
 if __name__ == "__main__":
