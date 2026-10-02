@@ -1,6 +1,7 @@
 from PyQt5.QtWidgets import (
     QWidget,
     QVBoxLayout,
+    QHBoxLayout,
     QGridLayout,
     QLabel,
     QComboBox,
@@ -9,8 +10,10 @@ from PyQt5.QtWidgets import (
     QGroupBox,
     QScrollArea,
     QPlainTextEdit,
+    QApplication,
 )
 from PyQt5.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
+from PyQt5.QtGui import QColor, QPalette
 from matplotlib import rcParams
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -91,6 +94,8 @@ class CalculationWorker(QObject):
 
 
 class PlotPanel(QWidget):
+    themeChanged = pyqtSignal(bool)
+
     MATERIALS = [record["name"] for record in MEAM_CATALOG.values()]
     MATERIAL_SYMBOLS = {record["name"]: symbol for symbol, record in MEAM_CATALOG.items()}
     METHODS = [*MACE_MODEL_OPTIONS, "MEAM", "DFT"]
@@ -105,6 +110,9 @@ class PlotPanel(QWidget):
         self.rows = []
         self._thread = None
         self._worker = None
+        self._last_results = []
+        self._last_errors = []
+        self.theme_colors = {}
         self.initUI()
 
     def initUI(self):
@@ -116,62 +124,20 @@ class PlotPanel(QWidget):
             "ytick.labelsize": 17,
             "legend.fontsize": 10,
         })
-        self.setStyleSheet("""
-            QWidget {
-                background-color: #1e1e1e;
-                color: #e6e6e6;
-                font-size: 20px;
-            }
-            QLabel#title {
-                font-size: 36px;
-                font-weight: bold;
-                padding: 10px 0;
-            }
-            QLabel.header {
-                color: #9cdcfe;
-                font-weight: bold;
-                font-size: 22px;
-            }
-            QGroupBox {
-                border: 1px solid #454545;
-                border-radius: 6px;
-                margin-top: 22px;
-                padding: 18px;
-                font-weight: bold;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-            QComboBox, QPushButton {
-                background-color: #2d2d2d;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 9px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #2d2d2d;
-                selection-background-color: #094771;
-            }
-            QPushButton {
-                background-color: #0e639c;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #1177bb;
-            }
-            QCheckBox {
-                spacing: 8px;
-            }
-        """)
-
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
 
+        title_row = QHBoxLayout()
         title = QLabel("Materials Properties Comparison")
         title.setObjectName("title")
-        layout.addWidget(title)
+        title_row.addWidget(title)
+        title_row.addStretch(1)
+        title_row.addWidget(QLabel("Theme"))
+        self.theme_selector = QComboBox()
+        self.theme_selector.addItems(["Dark", "Light"])
+        self.theme_selector.currentTextChanged.connect(self.apply_theme)
+        title_row.addWidget(self.theme_selector)
+        layout.addLayout(title_row)
 
         config_box = QGroupBox("Simulation configurations")
         grid = QGridLayout(config_box)
@@ -181,8 +147,7 @@ class PlotPanel(QWidget):
         headers = ["Use", "Configuration", "Material", "Lattice structure", "Method"]
         for column, text in enumerate(headers):
             header = QLabel(text)
-            header.setProperty("class", "header")
-            header.setStyleSheet("color: #9cdcfe; font-weight: bold; font-size: 22px;")
+            header.setObjectName("columnHeader")
             grid.addWidget(header, 0, column)
 
         for index in range(3):
@@ -257,7 +222,95 @@ class PlotPanel(QWidget):
         results_layout.addWidget(self.output_scroll, stretch=1)
 
         layout.addWidget(results_box, stretch=1)
-        self.show_empty_plots()
+        self.apply_theme(self.theme_selector.currentText())
+
+    def apply_theme(self, theme_name):
+        dark = theme_name == "Dark"
+        colors = {
+            "window": "#1e1e1e" if dark else "#f4f5f7",
+            "surface": "#252526" if dark else "#ffffff",
+            "control": "#2d2d2d" if dark else "#ffffff",
+            "text": "#e6e6e6" if dark else "#202124",
+            "secondary_text": "#cccccc" if dark else "#454a50",
+            "muted_text": "#bbbbbb" if dark else "#555b63",
+            "border": "#555555" if dark else "#aeb4bc",
+            "grid": "#555555" if dark else "#d9dde3",
+            "accent": "#0e639c" if dark else "#1769aa",
+            "accent_hover": "#1177bb" if dark else "#0f568d",
+            "selection": "#094771" if dark else "#cfe5fb",
+        }
+        self.theme_colors = colors
+
+        palette = QPalette()
+        palette.setColor(QPalette.Window, QColor(colors["window"]))
+        palette.setColor(QPalette.WindowText, QColor(colors["text"]))
+        palette.setColor(QPalette.Base, QColor(colors["surface"]))
+        palette.setColor(QPalette.AlternateBase, QColor(colors["window"]))
+        palette.setColor(QPalette.ToolTipBase, QColor(colors["surface"]))
+        palette.setColor(QPalette.ToolTipText, QColor(colors["text"]))
+        palette.setColor(QPalette.Text, QColor(colors["text"]))
+        palette.setColor(QPalette.Button, QColor(colors["control"]))
+        palette.setColor(QPalette.ButtonText, QColor(colors["text"]))
+        palette.setColor(QPalette.Highlight, QColor(colors["selection"]))
+        palette.setColor(QPalette.HighlightedText, QColor(colors["text"]))
+        app = QApplication.instance()
+        if app is not None:
+            app.setPalette(palette)
+            app.setStyleSheet(f"""
+                QMainWindow, QDialog, QWidget {{
+                    background-color: {colors['window']};
+                    color: {colors['text']};
+                }}
+                QMenu, QComboBox QAbstractItemView {{
+                    background-color: {colors['surface']};
+                    color: {colors['text']};
+                    selection-background-color: {colors['selection']};
+                }}
+                QToolTip {{
+                    background-color: {colors['surface']};
+                    color: {colors['text']};
+                    border: 1px solid {colors['border']};
+                }}
+            """)
+
+        self.setStyleSheet(f"""
+            QWidget {{
+                background-color: {colors['window']};
+                color: {colors['text']};
+                font-size: 20px;
+            }}
+            QLabel#title {{ font-size: 36px; font-weight: bold; padding: 10px 0; }}
+            QLabel#columnHeader {{ color: {colors['accent']}; font-weight: bold; font-size: 22px; }}
+            QGroupBox {{
+                border: 1px solid {colors['border']};
+                border-radius: 6px;
+                margin-top: 22px;
+                padding: 18px;
+                font-weight: bold;
+            }}
+            QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px; }}
+            QComboBox, QPushButton, QPlainTextEdit {{
+                background-color: {colors['control']};
+                color: {colors['text']};
+                border: 1px solid {colors['border']};
+                border-radius: 4px;
+                padding: 9px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {colors['surface']};
+                color: {colors['text']};
+                selection-background-color: {colors['selection']};
+            }}
+            QPushButton {{ background-color: {colors['accent']}; font-weight: bold; }}
+            QPushButton:hover {{ background-color: {colors['accent_hover']}; }}
+            QCheckBox {{ spacing: 8px; }}
+        """)
+        self.figure.set_facecolor(colors["surface"])
+        if self._last_results:
+            self.show_results(self._last_results, self._last_errors)
+        else:
+            self.show_empty_plots()
+        self.themeChanged.emit(dark)
 
     def update_lattices(self, dropdown, material):
         previous_value = dropdown.currentText()
@@ -270,7 +323,9 @@ class PlotPanel(QWidget):
             dropdown.setCurrentText(previous_value)
 
     def show_empty_plots(self, message="Run a configuration to calculate plots."):
+        colors = self.theme_colors
         self.figure.clear()
+        self.figure.set_facecolor(colors["surface"])
 
         plot_titles = [
             "Equation Of State",
@@ -281,15 +336,15 @@ class PlotPanel(QWidget):
 
         for index, title in enumerate(plot_titles, start=1):
             ax = self.figure.add_subplot(2, 2, index)
-            ax.set_facecolor("#252526")
-            ax.set_title(title, color="#e6e6e6")
-            ax.tick_params(colors="#cccccc")
+            ax.set_facecolor(colors["surface"])
+            ax.set_title(title, color=colors["text"])
+            ax.tick_params(colors=colors["secondary_text"])
             for spine in ax.spines.values():
-                spine.set_color("#777777")
+                spine.set_color(colors["border"])
 
             ax.text(
                 0.5, 0.5, message,
-                color="#bbbbbb",
+                color=colors["muted_text"],
                 ha="center", va="center",
                 transform=ax.transAxes,
                 wrap=True,
@@ -338,6 +393,8 @@ class PlotPanel(QWidget):
         self._thread = None
 
     def show_results(self, results, errors):
+        self._last_results = results
+        self._last_errors = errors
         if not results:
             message = "No calculations completed. " + "\n".join(errors)
             self.status_label.setText("Run finished with errors.")
@@ -386,15 +443,16 @@ class PlotPanel(QWidget):
         self.canvas.draw()
 
     def _new_axis(self, position, title, xlabel, ylabel):
+        colors = self.theme_colors
         axis = self.figure.add_subplot(2, 2, position)
-        axis.set_facecolor("#252526")
-        axis.set_title(title, color="#e6e6e6")
-        axis.set_xlabel(xlabel, color="#cccccc")
-        axis.set_ylabel(ylabel, color="#cccccc")
-        axis.tick_params(colors="#cccccc")
-        axis.grid(color="#555555", alpha=0.35)
+        axis.set_facecolor(colors["surface"])
+        axis.set_title(title, color=colors["text"])
+        axis.set_xlabel(xlabel, color=colors["secondary_text"])
+        axis.set_ylabel(ylabel, color=colors["secondary_text"])
+        axis.tick_params(colors=colors["secondary_text"])
+        axis.grid(color=colors["grid"], alpha=0.65 if self.theme_selector.currentText() == "Light" else 0.35)
         for spine in axis.spines.values():
-            spine.set_color("#777777")
+            spine.set_color(colors["border"])
         return axis
 
     def _plot_eos(self, results):
@@ -464,7 +522,7 @@ class PlotPanel(QWidget):
                 0.5,
                 0.5,
                 "No surface-energy results available",
-                color="#bbbbbb",
+                color=self.theme_colors["muted_text"],
                 ha="center",
                 va="center",
                 transform=axis.transAxes,

@@ -45,12 +45,12 @@ def set_dark_palette(app):
     """)
 
 
-def set_windows_dark_titlebar(window):
+def set_windows_dark_titlebar(window, dark=True):
     if sys.platform != "win32":
         return
 
     try:
-        dark_mode = ctypes.c_int(1)
+        dark_mode = ctypes.c_int(1 if dark else 0)
         hwnd = int(window.winId())
         dwmapi = ctypes.WinDLL("dwmapi")
         for attribute in (20, 19):
@@ -71,8 +71,14 @@ def main():
     app.setStyle("Fusion")
     set_dark_palette(app)
     window = MainWindow()
+    window.plot_panel.themeChanged.connect(
+        lambda dark: set_windows_dark_titlebar(window, dark)
+    )
     window.show()
-    set_windows_dark_titlebar(window)
+    set_windows_dark_titlebar(
+        window,
+        window.plot_panel.theme_selector.currentText() == "Dark",
+    )
     sys.exit(app.exec_())
 
 if __name__ == "__main__":
