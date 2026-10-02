@@ -49,6 +49,22 @@ Run the application using the following command:
 ```bash
 python src/main.py
 ```
+Follow the on-screen instructions to select materials, structures, and methods, and view the resulting plots.
+
+## Elastic Calculation Backends
+
+The elastic-properties module performs EOS and small-strain stress calculations for cubic FCC, BCC, and diamond structures. MACE-MP requires `ase` and `mace-torch`. MEAM uses ASE's LAMMPS calculator; install LAMMPS separately and provide a `library.meam` plus a material parameter file. Put potential files in `src/data/potentials/` or set `MEAM_LIBRARY` and `MEAM_PARAMETER_FILE`. Set `LAMMPS_COMMAND` if the executable is not named `lmp`. `MEAM_PAIR_COEFF` can override the default LAMMPS `pair_coeff` line; it accepts `{library}`, `{parameter}`, and `{element}` placeholders.
+
+DFT uses Quantum ESPRESSO through ASE. Install `pw.x`, place the selected element's `.UPF` file under `src/data/pseudopotentials/` or set `ESPRESSO_PSEUDO_DIR`, and select the file with `DFT_PSEUDO_AL`, `DFT_PSEUDO_CU`, or `DFT_PSEUDO_SI`. Set `ESPRESSO_COMMAND` if needed. Plane-wave cutoffs default to 60/480 Ry and can be overridden with `DFT_ECUTWFC_RY` and `DFT_ECUTRHO_RY`; converge these settings for the chosen pseudopotential before using results.
+
+No MEAM potential files, DFT pseudopotentials, LAMMPS executable, or Quantum ESPRESSO executable are bundled with this repository. The calculation function reports a setup error until the requested backend is configured. For example:
+
+```python
+from src.analysis.elastic_properties import compute_elastic_properties
+
+results = compute_elastic_properties("Aluminum", "FCC", "MACE-MP")
+print(results["C11"], results["C12"], results["C44"])
+```
 
 Follow the on-screen instructions to select materials, structures, and methods, and view the resulting plots.
 
