@@ -1,6 +1,8 @@
+import io
 import os
 import re
 import shutil
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -40,6 +42,7 @@ ELEMENT_NAMES = {
     "Ag": "Silver", "Sn": "Tin", "Ta": "Tantalum", "W": "Tungsten",
     "Ir": "Iridium", "Pt": "Platinum", "Au": "Gold", "Pb": "Lead", "Bi": "Bismuth",
 }
+_WINDOWS_LAMMPS_WRITER_LOCK = threading.RLock()
 
 
 def load_meam_library_catalog():
@@ -214,6 +217,7 @@ def _create_calculator(
     dft_pseudopotential,
     espresso_command,
     lammps_command,
+    espresso_kpts,
 ):
     if method == "MACE-MP":
         try:
@@ -242,7 +246,7 @@ def _create_calculator(
             )
 
         try:
-            from ase.calculators.lammpsrun import LAMMPS
+            import ase.calculators.lammpsrun as lammpsrun
         except ImportError as error:
             raise RuntimeError("MEAM calculations require ASE; install it with 'python -m pip install ase'.") from error
 
@@ -260,16 +264,41 @@ def _create_calculator(
             pair_coeff = f"* * {library.name} {library_element} {parameter.name} {symbol}"
         else:
             pair_coeff = f"* * {library.name} {library_element} NULL {library_element}"
-        return LAMMPS(
+        calculator_class = lammpsrun.LAMMPS
+        calculator_options = {}
+        if os.name == "nt":
+            class WindowsLAMMPS(lammpsrun.LAMMPS):
+                def run(self, set_atoms=False):
+                    original_writer = lammpsrun.write_lammps_in
+
+                    def write_windows_input(*, lammps_in, **kwargs):
+                        buffer = io.StringIO()
+                        original_writer(lammps_in=buffer, **kwargs)
+                        script = buffer.getvalue().replace("log /dev/stdout", "log none")
+                        lammps_in.write(script)
+
+                    with _WINDOWS_LAMMPS_WRITER_LOCK:
+                        lammpsrun.write_lammps_in = write_windows_input
+                        try:
+                            return super().run(set_atoms=set_atoms)
+                        finally:
+                            lammpsrun.write_lammps_in = original_writer
+
+            calculator_class = WindowsLAMMPS
+            calculator_options = {
+                "keep_alive": False,
+                "lammps_options": "-echo log",
+            }
+
+        return calculator_class(
             command=command,
             files=files,
             specorder=[symbol],
-            parameters={
-                "units": "metal",
-                "atom_style": "atomic",
-                "pair_style": "meam",
-                "pair_coeff": [pair_coeff],
-            },
+            units="metal",
+            atom_style="atomic",
+            pair_style="meam",
+            pair_coeff=[pair_coeff],
+            **calculator_options,
         )
 
     if method == "DFT":
@@ -323,14 +352,14 @@ def _create_calculator(
             profile=profile,
             pseudopotentials={symbol: pseudo_path.name},
             input_data={
-                "control": {"calculation": "scf", "tstress": True},
+                "control": {"calculation": "scf", "tstress": True, "tprnfor": True},
                 "system": {
                     "ecutwfc": float(os.getenv("DFT_ECUTWFC_RY", "60")),
                     "ecutrho": float(os.getenv("DFT_ECUTRHO_RY", "480")),
                 },
                 "electrons": {"conv_thr": 1.0e-8},
             },
-            kpts=(8, 8, 8),
+            kpts=espresso_kpts,
         )
 
     raise ValueError(f"Unsupported method: {method}")
@@ -352,6 +381,7 @@ def compute_elastic_properties(
     dft_pseudopotential=None,
     espresso_command=None,
     lammps_command=None,
+    espresso_kpts=(8, 8, 8),
     calculator=None,
 ):
     """Run cubic EOS and small-strain stress calculations using an ASE calculator.
@@ -381,6 +411,7 @@ def compute_elastic_properties(
             dft_pseudopotential,
             espresso_command,
             lammps_command,
+            espresso_kpts,
         )
 
     if lattice_parameters is None:
@@ -486,6 +517,40 @@ def compute_elastic_properties(
             "sigma_xy_GPa": sigma_xy * EV_A3_TO_GPA,
         },
     }
+
+
+def create_calculator(
+    material,
+    method,
+    *,
+    model="small",
+    meam_library=None,
+    meam_parameter_file=None,
+    meam_pair_coeff=None,
+    meam_library_element=None,
+    dft_pseudo_dir=None,
+    dft_pseudopotential=None,
+    espresso_command=None,
+    lammps_command=None,
+    espresso_kpts=(8, 8, 8),
+):
+    """Create the requested ASE calculator for reuse across related calculations."""
+    _, symbol = _normalize_material(material)
+    method_name = _normalize_method(method)
+    return _create_calculator(
+        method_name,
+        symbol,
+        model,
+        meam_library,
+        meam_parameter_file,
+        meam_pair_coeff,
+        meam_library_element,
+        dft_pseudo_dir,
+        dft_pseudopotential,
+        espresso_command,
+        lammps_command,
+        espresso_kpts,
+    )
 
 
 def calculate_elastic_properties(material, method, lattice_structure=None, **options):

@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QCheckBox,
     QGroupBox,
+    QScrollArea,
 )
 from PyQt5.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 from matplotlib import rcParams
@@ -19,8 +20,10 @@ try:
         EV_A3_TO_GPA,
         MEAM_CATALOG,
         birch_murnaghan,
+        create_calculator,
         compute_elastic_properties,
     )
+    from analysis.surface_energy import compute_surface_energies
 except ModuleNotFoundError as error:
     if error.name != "analysis":
         raise
@@ -28,8 +31,10 @@ except ModuleNotFoundError as error:
         EV_A3_TO_GPA,
         MEAM_CATALOG,
         birch_murnaghan,
+        create_calculator,
         compute_elastic_properties,
     )
+    from src.analysis.surface_energy import compute_surface_energies
 
 
 class CalculationWorker(QObject):
@@ -50,7 +55,25 @@ class CalculationWorker(QObject):
                 label = f"Run {run_number}: {material} / {lattice} / {method}"
                 self.progress.emit(f"Calculating {label}...")
                 try:
-                    result = compute_elastic_properties(material, lattice, method)
+                    calculator = create_calculator(material, method)
+                    result = compute_elastic_properties(
+                        material,
+                        lattice,
+                        method,
+                        calculator=calculator,
+                    )
+                    try:
+                        result["surface_energy_data"] = compute_surface_energies(
+                            material,
+                            lattice,
+                            method,
+                            calculator=calculator,
+                            bulk_energy_per_atom=result["E0_atom"],
+                            lattice_parameter=result["a0"],
+                        )
+                    except Exception as error:
+                        result["surface_energy_data"] = {"surfaces": []}
+                        errors.append(f"{label} surface energies: {error}")
                     results.append((label, result))
                 except Exception as error:
                     errors.append(f"{label}: {error}")
@@ -78,34 +101,34 @@ class PlotPanel(QWidget):
 
     def initUI(self):
         rcParams.update({
-            "font.size": 20,
-            "axes.titlesize": 29,
-            "axes.labelsize": 20,
-            "xtick.labelsize": 17,
-            "ytick.labelsize": 17,
-            "legend.fontsize": 11,
+            "font.size": 16,
+            "axes.titlesize": 22,
+            "axes.labelsize": 16,
+            "xtick.labelsize": 14,
+            "ytick.labelsize": 14,
+            "legend.fontsize": 10,
         })
         self.setStyleSheet("""
             QWidget {
                 background-color: #1e1e1e;
                 color: #e6e6e6;
-                font-size: 42px;
+                font-size: 24px;
             }
             QLabel#title {
-                font-size: 69px;
+                font-size: 42px;
                 font-weight: bold;
-                padding: 18px 0;
+                padding: 10px 0;
             }
             QLabel.header {
                 color: #9cdcfe;
                 font-weight: bold;
-                font-size: 42px;
+                font-size: 24px;
             }
             QGroupBox {
                 border: 1px solid #454545;
                 border-radius: 6px;
-                margin-top: 40px;
-                padding: 36px;
+                margin-top: 22px;
+                padding: 18px;
                 font-weight: bold;
             }
             QGroupBox::title {
@@ -117,7 +140,7 @@ class PlotPanel(QWidget):
                 background-color: #2d2d2d;
                 border: 1px solid #555;
                 border-radius: 4px;
-                padding: 14px;
+                padding: 9px;
             }
             QComboBox QAbstractItemView {
                 background-color: #2d2d2d;
@@ -151,7 +174,7 @@ class PlotPanel(QWidget):
         for column, text in enumerate(headers):
             header = QLabel(text)
             header.setProperty("class", "header")
-            header.setStyleSheet("color: #9cdcfe; font-weight: bold; font-size: 42px;")
+            header.setStyleSheet("color: #9cdcfe; font-weight: bold; font-size: 24px;")
             grid.addWidget(header, 0, column)
 
         for index in range(3):
@@ -203,14 +226,19 @@ class PlotPanel(QWidget):
         results_layout = QVBoxLayout(results_box)
 
         self.status_label = QLabel(
-            "Select configurations and click Run. Surface-energy calculations are not connected."
+            "Select configurations and click Run to calculate elastic properties and surface energies."
         )
         self.status_label.setWordWrap(True)
         results_layout.addWidget(self.status_label)
 
-        self.figure = Figure(figsize=(10, 6), facecolor="#1e1e1e")
+        self.figure = Figure(figsize=(12, 15), facecolor="#1e1e1e")
         self.canvas = FigureCanvas(self.figure)
-        results_layout.addWidget(self.canvas)
+        self.canvas.setMinimumSize(1100, 1500)
+        self.output_scroll = QScrollArea()
+        self.output_scroll.setWidgetResizable(True)
+        self.output_scroll.setMinimumHeight(500)
+        self.output_scroll.setWidget(self.canvas)
+        results_layout.addWidget(self.output_scroll, stretch=1)
 
         layout.addWidget(results_box, stretch=1)
         self.show_empty_plots()
@@ -302,7 +330,7 @@ class PlotPanel(QWidget):
         self._plot_eos(results)
         self._plot_stress_strain(results)
         self._plot_elastic_constants(results)
-        self._plot_surface_energy_placeholder()
+        self._plot_surface_energies(results)
         summaries = []
         for label, result in results:
             summaries.append(
@@ -310,7 +338,6 @@ class PlotPanel(QWidget):
                 f"C11={result['C11']:.2f}, C12={result['C12']:.2f}, "
                 f"C44={result['C44']:.2f}, E={result['E']:.2f} GPa, nu={result['nu']:.4f}"
             )
-        summaries.append("Surface energies are not plotted: the surface-energy module is still a placeholder.")
         if errors:
             summaries.append("Failed runs: " + " | ".join(errors))
         self.status_label.setText("\n".join(summaries))
@@ -386,16 +413,39 @@ class PlotPanel(QWidget):
         axis.set_xticks(positions, names)
         axis.legend(fontsize=14)
 
-    def _plot_surface_energy_placeholder(self):
-        axis = self._new_axis(4, "Surface energies", "", "")
-        axis.set_axis_off()
-        axis.text(
-            0.5,
-            0.5,
-            "Surface-energy backend is not implemented.\nPlaceholder values are not plotted.",
-            color="#bbbbbb",
-            ha="center",
-            va="center",
-            transform=axis.transAxes,
-            wrap=True,
-        )
+    def _plot_surface_energies(self, results):
+        axis = self._new_axis(4, "Surface energies", "Surface orientation", "Energy (eV/Å²)")
+        available = [
+            (label, result, result.get("surface_energy_data", {}).get("surfaces", []))
+            for label, result in results
+        ]
+        available = [entry for entry in available if entry[2]]
+        if not available:
+            axis.text(
+                0.5,
+                0.5,
+                "No surface-energy results available",
+                color="#bbbbbb",
+                ha="center",
+                va="center",
+                transform=axis.transAxes,
+            )
+            return
+
+        orientations = sorted({
+            surface_result["orientation"]
+            for _, _, surfaces in available
+            for surface_result in surfaces
+        })
+        positions = np.arange(len(orientations))
+        width = 0.8 / len(available)
+        for index, (label, _, surfaces) in enumerate(available):
+            energy_by_orientation = {
+                surface_result["orientation"]: surface_result["energy_eV_A2"]
+                for surface_result in surfaces
+            }
+            values = [energy_by_orientation.get(orientation, np.nan) for orientation in orientations]
+            offset = (index - (len(available) - 1) / 2.0) * width
+            axis.bar(positions + offset, values, width=width, label=label)
+        axis.set_xticks(positions, orientations)
+        axis.legend(fontsize=10)
