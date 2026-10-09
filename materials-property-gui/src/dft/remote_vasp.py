@@ -1,4 +1,5 @@
 import shlex
+import re
 
 
 SSH_HOST = "m3.massive.org.au"
@@ -7,9 +8,25 @@ REMOTE_SCRATCH_DIRECTORY = "/fs04/scratch2/he41/temp_runs/jp_script/vasp"
 VASP_MODULE = "vasp/6.4.2"
 VASP_PREREQUISITE_MODULES = (
     "hpcx/.2.14-redhat9.2-patch1",
+    "hpcx-ompi",
     "hdf5/1.12.3",
     "wannier90/3.1.0-mpi",
 )
+MODULE_INIT_SCRIPT = "/etc/profile.d/modules.sh"
+
+
+def module_shell_command(script):
+    initialized_script = f"source {shlex.quote(MODULE_INIT_SCRIPT)}\n{script}"
+    return "bash --noprofile --norc -c " + shlex.quote(initialized_script)
+
+
+def clean_shell_startup_warnings(text):
+    warning_pattern = re.compile(
+        r"^/home/[^/]+/\.bash(?:rc|_profile): line \d+: .*: No such file or directory$"
+    )
+    return "\n".join(
+        line for line in text.splitlines() if not warning_pattern.match(line)
+    ).strip()
 
 
 def _module_setup_lines():
@@ -28,7 +45,7 @@ def _cluster_inspection_command():
         f"printf 'STAGING_DIRECTORY={shlex.quote(REMOTE_SCRATCH_DIRECTORY)}\\n'",
         "if [ -n \"${VASP_PP_PATH:-}\" ]; then find \"$VASP_PP_PATH\" -maxdepth 6 -type f -name POTCAR -print 2>/dev/null | head -20; fi",
     ))
-    return "bash -lc " + shlex.quote(script)
+    return module_shell_command(script)
 
 
 def inspect_cluster(username, password, client_factory=None):
@@ -67,7 +84,9 @@ def inspect_cluster(username, password, client_factory=None):
 
         _, stdout, stderr = client.exec_command(_cluster_inspection_command(), timeout=60)
         output = stdout.read().decode("utf-8", errors="replace").strip()
-        errors = stderr.read().decode("utf-8", errors="replace").strip()
+        errors = clean_shell_startup_warnings(
+            stderr.read().decode("utf-8", errors="replace")
+        )
         exit_status = stdout.channel.recv_exit_status()
         return {
             "host": SSH_HOST,

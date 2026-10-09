@@ -27,6 +27,8 @@ try:
         SSH_HOST,
         VASP_PREREQUISITE_MODULES,
         VASP_MODULE,
+        clean_shell_startup_warnings,
+        module_shell_command,
     )
 except ModuleNotFoundError as error:
     if error.name not in {"analysis", "dft"}:
@@ -48,6 +50,8 @@ except ModuleNotFoundError as error:
         SSH_HOST,
         VASP_PREREQUISITE_MODULES,
         VASP_MODULE,
+        clean_shell_startup_warnings,
+        module_shell_command,
     )
 
 
@@ -263,8 +267,9 @@ def _validate_remote_environment(client, symbol):
         "printf 'POTCAR_SOURCE=%s\\n' \"$potcar_source\"",
         "test -n \"$vasp_executable\" && test -n \"$potcar_source\"",
     ))
-    command = "bash -lc " + shlex.quote(script)
+    command = module_shell_command(script)
     output, errors, status = _remote_command(client, command, timeout=60, check=False)
+    errors = clean_shell_startup_warnings(errors)
     if status != 0:
         raise RuntimeError(
             "Cluster preflight failed for this element. Expected vasp_std and a PBE POTCAR "
