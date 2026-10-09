@@ -31,6 +31,7 @@ try:
         mace_model_for_method,
     )
     from analysis.surface_energy import compute_surface_energies
+    from analysis.result_cache import CalculationResultCache
 except ModuleNotFoundError as error:
     if error.name != "analysis":
         raise
@@ -44,6 +45,7 @@ except ModuleNotFoundError as error:
         mace_model_for_method,
     )
     from src.analysis.surface_energy import compute_surface_energies
+    from src.analysis.result_cache import CalculationResultCache
 
 
 class CalculationWorker(QObject):
@@ -54,6 +56,7 @@ class CalculationWorker(QObject):
     def __init__(self, configurations):
         super().__init__()
         self.configurations = configurations
+        self.result_cache = CalculationResultCache()
 
     @pyqtSlot()
     def run(self):
@@ -62,6 +65,16 @@ class CalculationWorker(QObject):
         try:
             for run_number, material, lattice, method in self.configurations:
                 label = f"Run {run_number}: {material} / {lattice} / {method}"
+                try:
+                    cached_result = self.result_cache.load(material, lattice, method)
+                except Exception as error:
+                    cached_result = None
+                    self.progress.emit(f"Cache check failed for {label}: {error}")
+                if cached_result is not None:
+                    self.progress.emit(f"Loading cached results for {label}...")
+                    results.append((label, cached_result))
+                    continue
+
                 self.progress.emit(f"Calculating {label}...")
                 try:
                     model = mace_model_for_method(method)
@@ -86,6 +99,11 @@ class CalculationWorker(QObject):
                     except Exception as error:
                         result["surface_energy_data"] = {"surfaces": []}
                         errors.append(f"{label} surface energies: {error}")
+                    else:
+                        try:
+                            self.result_cache.save(material, lattice, method, result)
+                        except Exception as error:
+                            errors.append(f"{label} cache save: {error}")
                     results.append((label, result))
                 except Exception as error:
                     errors.append(f"{label}: {error}")
