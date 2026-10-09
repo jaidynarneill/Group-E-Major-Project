@@ -1,10 +1,37 @@
 import unittest
+from types import ModuleType
 from unittest.mock import Mock, patch
 
 from src.ui.plot_panel import CalculationWorker, configurations_need_cluster_login
+from src.ui.cluster_connection_dialog import (
+    CREDENTIAL_ACCOUNT,
+    CREDENTIAL_SERVICE,
+    _load_saved_credentials,
+    _save_credentials,
+)
 
 
 class TestClusterRunGating(unittest.TestCase):
+    def test_credentials_are_remembered_through_the_os_keyring(self):
+        entries = {}
+        keyring = ModuleType("keyring")
+        keyring.get_password = lambda service, account: entries.get((service, account))
+        keyring.set_password = lambda service, account, value: entries.__setitem__((service, account), value)
+
+        with patch.dict("sys.modules", {"keyring": keyring}):
+            _save_credentials("student", "secret")
+            loaded = _load_saved_credentials()
+
+        self.assertEqual(loaded, ("student", "secret"))
+        self.assertEqual(len(entries), 1)
+        self.assertIn((CREDENTIAL_SERVICE, CREDENTIAL_ACCOUNT), entries)
+
+    def test_invalid_saved_credential_data_is_ignored(self):
+        keyring = ModuleType("keyring")
+        keyring.get_password = lambda service, account: "not valid credential json"
+        with patch.dict("sys.modules", {"keyring": keyring}):
+            self.assertIsNone(_load_saved_credentials())
+
     def test_local_only_run_does_not_require_cluster_login(self):
         configurations = [
             (1, "Copper", "FCC", "MEAM"),

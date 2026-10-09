@@ -20,6 +20,7 @@ python -m PyInstaller `
     --collect-all e3nn `
     --collect-all ase `
     --collect-all paramiko `
+    --collect-all keyring `
     src\main.py
 
 if ($LASTEXITCODE -ne 0) {

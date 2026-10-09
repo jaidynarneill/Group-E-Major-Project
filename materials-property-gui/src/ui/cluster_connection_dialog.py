@@ -1,41 +1,59 @@
+import json
+
 from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
-    QLabel,
     QLineEdit,
-    QPushButton,
-    QPlainTextEdit,
+    QMessageBox,
     QVBoxLayout,
 )
 
 try:
-    from dft.remote_vasp import (
-        MODULEFILE_DIRECTORY,
-        REMOTE_SCRATCH_DIRECTORY,
-        SSH_HOST,
-        VASP_MODULE,
-        inspect_cluster,
-    )
+    from dft.remote_vasp import inspect_cluster
 except ModuleNotFoundError as error:
     if error.name != "dft":
         raise
-    from src.dft.remote_vasp import (
-        MODULEFILE_DIRECTORY,
-        REMOTE_SCRATCH_DIRECTORY,
-        SSH_HOST,
-        VASP_MODULE,
-        inspect_cluster,
+    from src.dft.remote_vasp import inspect_cluster
+
+
+CREDENTIAL_SERVICE = "MaterialsPropertyGUI"
+CREDENTIAL_ACCOUNT = "m3.massive.org.au"
+
+
+def _load_saved_credentials():
+    try:
+        import keyring
+
+        saved = keyring.get_password(CREDENTIAL_SERVICE, CREDENTIAL_ACCOUNT)
+        credentials = json.loads(saved) if saved else None
+    except Exception:
+        return None
+    if not isinstance(credentials, dict):
+        return None
+    username = credentials.get("username")
+    password = credentials.get("password")
+    if not isinstance(username, str) or not isinstance(password, str):
+        return None
+    return username, password
+
+
+def _save_credentials(username, password):
+    import keyring
+
+    keyring.set_password(
+        CREDENTIAL_SERVICE,
+        CREDENTIAL_ACCOUNT,
+        json.dumps({"username": username, "password": password}),
     )
 
 
 class ClusterConnectionDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("DFT cluster credentials")
-        self.setMinimumWidth(560)
-        self.cluster_report = None
+        self.setWindowTitle("Cluster login")
+        self.setMinimumWidth(460)
         self.credentials = None
 
         layout = QVBoxLayout(self)
@@ -45,23 +63,12 @@ class ClusterConnectionDialog(QDialog):
         self.password_input = QLineEdit()
         self.password_input.setEchoMode(QLineEdit.Password)
         self.password_input.setPlaceholderText("Cluster password")
-        form.addRow("SSH host", QLabel(SSH_HOST))
+        for field in (self.username_input, self.password_input):
+            field.setMinimumHeight(44)
+            field.setStyleSheet("font-size: 18px; padding: 6px;")
         form.addRow("Username", self.username_input)
         form.addRow("Password", self.password_input)
-        form.addRow("VASP module", QLabel(VASP_MODULE))
-        form.addRow("Module files", QLabel(MODULEFILE_DIRECTORY))
-        form.addRow("Scratch staging folder", QLabel(REMOTE_SCRATCH_DIRECTORY))
         layout.addLayout(form)
-
-        self.status_label = QLabel("Credentials are requested only for enabled DFT runs. No password is saved.")
-        self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
-
-        self.details = QPlainTextEdit()
-        self.details.setReadOnly(True)
-        self.details.setMaximumBlockCount(200)
-        self.details.setPlaceholderText("Cluster inspection details will appear here.")
-        layout.addWidget(self.details)
 
         buttons = QDialogButtonBox()
         self.connect_button = buttons.addButton("Connect", QDialogButtonBox.AcceptRole)
@@ -70,38 +77,40 @@ class ClusterConnectionDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+        saved_credentials = _load_saved_credentials()
+        if saved_credentials is not None:
+            self.username_input.setText(saved_credentials[0])
+            self.password_input.setText(saved_credentials[1])
+            self.password_input.setFocus()
+        else:
+            self.username_input.setFocus()
+
     def test_connection(self):
         username = self.username_input.text().strip()
         password = self.password_input.text()
-        self.details.clear()
-        self.status_label.setText("Connecting and checking the cluster...")
+        if not username or not password:
+            QMessageBox.warning(self, "Cluster login", "Enter both your username and password.")
+            return
         self.connect_button.setEnabled(False)
         QApplication.processEvents()
         try:
-            report = inspect_cluster(username, password)
+            inspect_cluster(username, password)
         except Exception as error:
             message = str(error)
             for secret in (password, username):
                 if secret:
                     message = message.replace(secret, "[redacted]")
-            self.status_label.setText("Connection or inspection failed.")
-            self.details.setPlainText(message)
+            QMessageBox.warning(self, "Cluster login failed", message)
         else:
-            self.cluster_report = report
             self.credentials = (username, password)
-            self.status_label.setText("SSH login succeeded. No jobs were submitted.")
-            lines = [
-                f"Host: {report['host']}",
-                f"Scratch directory: {report['scratch_directory']}",
-                "Scratch directory entries:",
-                *(f"  {entry}" for entry in report["scratch_entries"]),
-                "VASP module and POTCAR inspection output:",
-                report["command_output"] or "(no stdout)",
-            ]
-            if report["command_errors"]:
-                lines.extend(("Inspection stderr:", report["command_errors"]))
-            lines.append(f"Inspection exit status: {report['command_exit_status']}")
-            self.details.setPlainText("\n".join(lines))
+            try:
+                _save_credentials(username, password)
+            except Exception:
+                QMessageBox.warning(
+                    self,
+                    "Credentials not saved",
+                    "Login succeeded, but Windows Credential Manager could not save the credentials.",
+                )
             self.accept()
         finally:
             self.password_input.clear()
