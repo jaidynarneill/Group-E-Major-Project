@@ -4,7 +4,7 @@ import re
 
 SSH_HOST = "m3.massive.org.au"
 MODULEFILE_DIRECTORY = "/projects/lh36/sdwi0002/opt/modulefiles"
-REMOTE_SCRATCH_DIRECTORY = "/fs04/scratch2/he41/temp_runs/jp_script/vasp"
+REMOTE_SCRATCH_DIRECTORY = "/fs04/scratch2/lh36/jarn0012/vasp"
 VASP_MODULE = "vasp/6.4.2"
 VASP_PREREQUISITE_MODULES = (
     "hpcx/.2.14-redhat9.2-patch1",

@@ -15,6 +15,7 @@ module load hpcx/.2.14-redhat9.2-patch1
 module load hdf5/1.12.3
 module load wannier90/3.1.0-mpi
 module load vasp/6.4.2
+potgen Si O
 
 export I_MPI_HYDRA_BOOTSTRAP=slurm
 
