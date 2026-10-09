@@ -5,12 +5,24 @@ SSH_HOST = "m3.massive.org.au"
 MODULEFILE_DIRECTORY = "/projects/lh36/sdwi0002/opt/modulefiles"
 REMOTE_SCRATCH_DIRECTORY = "/fs04/scratch2/he41/temp_runs/jp_script/vasp"
 VASP_MODULE = "vasp/6.4.2"
+VASP_PREREQUISITE_MODULES = (
+    "hpcx/.2.14-redhat9.2-patch1",
+    "hdf5/1.12.3",
+    "wannier90/3.1.0-mpi",
+)
+
+
+def _module_setup_lines():
+    return (
+        f"module use {shlex.quote(MODULEFILE_DIRECTORY)}",
+        *(f"module load {shlex.quote(module)}" for module in VASP_PREREQUISITE_MODULES),
+        f"module load {shlex.quote(VASP_MODULE)}",
+    )
 
 
 def _cluster_inspection_command():
     script = "\n".join((
-        f"module use {shlex.quote(MODULEFILE_DIRECTORY)}",
-        f"module load {shlex.quote(VASP_MODULE)}",
+        *_module_setup_lines(),
         "printf 'VASP_EXECUTABLE='; command -v vasp_std || true; printf '\\n'",
         "printf 'VASP_PP_PATH=%s\\n' \"${VASP_PP_PATH:-}\"",
         f"printf 'STAGING_DIRECTORY={shlex.quote(REMOTE_SCRATCH_DIRECTORY)}\\n'",

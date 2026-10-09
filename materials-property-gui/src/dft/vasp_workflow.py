@@ -25,6 +25,7 @@ try:
         MODULEFILE_DIRECTORY,
         REMOTE_SCRATCH_DIRECTORY,
         SSH_HOST,
+        VASP_PREREQUISITE_MODULES,
         VASP_MODULE,
     )
 except ModuleNotFoundError as error:
@@ -45,6 +46,7 @@ except ModuleNotFoundError as error:
         MODULEFILE_DIRECTORY,
         REMOTE_SCRATCH_DIRECTORY,
         SSH_HOST,
+        VASP_PREREQUISITE_MODULES,
         VASP_MODULE,
     )
 
@@ -251,6 +253,7 @@ def _validate_remote_environment(client, symbol):
     quoted_symbol = shlex.quote(symbol)
     script = "\n".join((
         f"module use {shlex.quote(MODULEFILE_DIRECTORY)}",
+        f"module load {' '.join(map(shlex.quote, VASP_PREREQUISITE_MODULES))}",
         f"module load {shlex.quote(VASP_MODULE)}",
         "vasp_executable=$(command -v vasp_std || true)",
         "printf 'VASP_EXECUTABLE=%s\\n' \"$vasp_executable\"",

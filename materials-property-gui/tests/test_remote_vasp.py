@@ -39,6 +39,10 @@ class TestRemoteVaspInspection(unittest.TestCase):
         command = client.exec_command.call_args.args[0]
         self.assertIn(MODULEFILE_DIRECTORY, command)
         self.assertIn(VASP_MODULE, command)
+        self.assertIn("hpcx/.2.14-redhat9.2-patch1", command)
+        self.assertIn("hdf5/1.12.3", command)
+        self.assertIn("wannier90/3.1.0-mpi", command)
+        self.assertNotIn("module load hpcx-ompi", command)
         self.assertIn(REMOTE_SCRATCH_DIRECTORY, command)
         self.assertEqual(report["scratch_entries"], ["POTCAR", "run.sh"])
         self.assertNotIn("secret", repr(report))
