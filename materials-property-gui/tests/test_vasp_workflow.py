@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, call, patch
 
 import numpy as np
 from ase.build import bulk
@@ -8,12 +9,60 @@ from ase.build import bulk
 from src.analysis.elastic_properties import EV_A3_TO_GPA, birch_murnaghan
 from src.dft.vasp_workflow import (
     _assemble_report,
+    _stage_phase,
     build_eos_tasks,
     build_followup_tasks,
 )
 
 
 class TestVaspWorkflow(unittest.TestCase):
+    def test_phase_stages_task_inputs_submits_and_downloads_outputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            local_phase = Path(directory)
+            task_directory = local_phase / "eos_00"
+            task_directory.mkdir()
+            for filename in ("POSCAR", "KPOINTS", "INCAR.template"):
+                (task_directory / filename).write_text(filename, encoding="ascii")
+            sftp = Mock()
+            client = Mock()
+            progress = Mock()
+            command_outputs = [
+                ("", "", 0),
+                ("", "", 0),
+                ("", "", 0),
+                ("98765;cluster", "", 0),
+            ]
+
+            with (
+                patch("src.dft.vasp_workflow._remote_command", side_effect=command_outputs) as remote_command,
+                patch("src.dft.vasp_workflow._wait_for_job") as wait_for_job,
+                patch("src.dft.vasp_workflow._read_vasp_result", return_value={"energy": -1.25}) as read_result,
+            ):
+                result = _stage_phase(
+                    sftp,
+                    client,
+                    "/scratch/job",
+                    "eos",
+                    [{"name": "eos_00", "kind": "eos"}],
+                    "Na",
+                    local_phase,
+                    "dft-na-eos",
+                    progress,
+                    0.01,
+                    60,
+                )
+
+        self.assertEqual(result, {"eos_00": {"energy": -1.25}})
+        self.assertEqual(sftp.put.call_count, 4)
+        sftp.putfo.assert_called_once()
+        sftp.get.assert_called_once_with(
+            "/scratch/job/eos/tasks/eos_00/OUTCAR",
+            str(task_directory / "OUTCAR"),
+        )
+        wait_for_job.assert_called_once_with(client, "/scratch/job/eos", "98765", progress, 0.01, 60)
+        read_result.assert_called_once_with(task_directory / "OUTCAR")
+        self.assertIn("sbatch --parsable", remote_command.call_args_list[-1].args[1])
+
     def test_na_bcc_task_generation_writes_full_report_inputs(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
