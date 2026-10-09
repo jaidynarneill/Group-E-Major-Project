@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -48,6 +49,8 @@ def _cache_directory():
     configured_directory = os.getenv("MATERIALS_PROPERTY_CACHE")
     if configured_directory:
         return Path(configured_directory).expanduser()
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "calculations"
     if os.name == "nt":
         base_directory = Path(os.getenv("LOCALAPPDATA", Path.home()))
     else:

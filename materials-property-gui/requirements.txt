@@ -3,6 +3,7 @@ numpy>=1.26
 matplotlib>=3.8
 scipy>=1.11
 PyQt5>=5.15.10
+paramiko>=3.4,<5
 pandas>=2.1
 ase>=3.23
 mace-torch>=0.3.10

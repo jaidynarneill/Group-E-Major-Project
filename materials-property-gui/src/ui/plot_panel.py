@@ -32,6 +32,7 @@ try:
     )
     from analysis.surface_energy import compute_surface_energies
     from analysis.result_cache import CalculationResultCache
+    from ui.cluster_connection_dialog import ClusterConnectionDialog
 except ModuleNotFoundError as error:
     if error.name != "analysis":
         raise
@@ -46,6 +47,7 @@ except ModuleNotFoundError as error:
     )
     from src.analysis.surface_energy import compute_surface_energies
     from src.analysis.result_cache import CalculationResultCache
+    from src.ui.cluster_connection_dialog import ClusterConnectionDialog
 
 
 class CalculationWorker(QObject):
@@ -210,9 +212,14 @@ class PlotPanel(QWidget):
 
         layout.addWidget(config_box)
 
+        actions = QHBoxLayout()
         self.run_button = QPushButton("Run")
         self.run_button.clicked.connect(self.run_calculations)
-        layout.addWidget(self.run_button)
+        self.cluster_test_button = QPushButton("Test VASP cluster")
+        self.cluster_test_button.clicked.connect(self.test_vasp_cluster)
+        actions.addWidget(self.run_button)
+        actions.addWidget(self.cluster_test_button)
+        layout.addLayout(actions)
 
         results_box = QGroupBox("Results")
         results_layout = QVBoxLayout(results_box)
@@ -346,6 +353,10 @@ class PlotPanel(QWidget):
 
         if previous_value in options:
             dropdown.setCurrentText(previous_value)
+
+    def test_vasp_cluster(self):
+        dialog = ClusterConnectionDialog(self)
+        dialog.exec_()
 
     def show_empty_plots(self, message="Run a configuration to calculate plots."):
         colors = self.theme_colors
@@ -523,21 +534,37 @@ class PlotPanel(QWidget):
 
     def _plot_eos(self, results):
         self.figure.clear()
-        axis = self._new_axis(1, "Equation Of State", "Volume (Å³/cell)", "Energy (eV/atom)")
+        axis = self._new_axis(1, "Equation Of State", "Volume (Å³/cell)", "Energy above minimum (eV/atom)")
         for index, (label, result) in enumerate(results):
             data = result["eos_data"]
             color = f"C{index % 10}"
-            axis.scatter(data["volume"], data["energy_per_atom"], color=color, label=f"{label} data")
-            fit_volume = np.linspace(data["volume"].min(), data["volume"].max(), 200)
+            equilibrium_energy = result["E0_atom"]
+            axis.scatter(
+                data["volume"],
+                data["energy_per_atom"] - equilibrium_energy,
+                color=color,
+                label=f"{label} data",
+            )
+            fit_volume = np.sort(
+                np.append(
+                    np.linspace(data["volume"].min(), data["volume"].max(), 200),
+                    result["V0"],
+                )
+            )
             atoms_per_cell = result["atoms_per_cell"]
             fit_energy = birch_murnaghan(
                 fit_volume,
-                result["E0_atom"] * atoms_per_cell,
+                equilibrium_energy * atoms_per_cell,
                 result["V0"],
                 result["B_EOS"] / EV_A3_TO_GPA,
                 result["B_prime"],
             ) / atoms_per_cell
-            axis.plot(fit_volume, fit_energy, color=color, label=f"{label} fit")
+            axis.plot(
+                fit_volume,
+                fit_energy - equilibrium_energy,
+                color=color,
+                label=f"{label} fit",
+            )
         axis.legend(fontsize=14)
 
     def _plot_stress_strain(self, results):
