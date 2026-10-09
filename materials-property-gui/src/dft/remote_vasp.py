@@ -4,7 +4,7 @@ import shlex
 SSH_HOST = "m3.massive.org.au"
 MODULEFILE_DIRECTORY = "/projects/lh36/sdwi0002/opt/modulefiles"
 REMOTE_SCRATCH_DIRECTORY = "/fs04/scratch2/he41/temp_runs/jp_script/vasp"
-VASP_MODULE = "vasp/6.6.1"
+VASP_MODULE = "vasp/6.4.2"
 
 
 def _cluster_inspection_command():
