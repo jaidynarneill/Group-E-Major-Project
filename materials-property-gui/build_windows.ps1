@@ -14,10 +14,12 @@ python -m PyInstaller `
     --name MaterialsPropertyGUI `
     --paths src `
     --add-data "src\data;src\data" `
+    --add-data "src\dft\run.sh;src\dft" `
     --collect-all torch `
     --collect-all mace `
     --collect-all e3nn `
     --collect-all ase `
+    --collect-all paramiko `
     src\main.py
 
 if ($LASTEXITCODE -ne 0) {

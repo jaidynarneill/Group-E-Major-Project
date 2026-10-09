@@ -46,20 +46,9 @@ class TestElasticProperties(unittest.TestCase):
                 create_calculator("Aluminum", method)
                 mace_mp.assert_called_once_with(model=model, default_dtype="float64")
 
-    def test_dft_calculator_uses_bundled_sssp_pseudopotential_and_cutoffs(self):
-        with patch("src.analysis.elastic_properties.shutil.which", return_value="pw.x"):
-            calculator = create_calculator("Aluminum", "DFT")
-
-        self.assertEqual(
-            calculator.profile.pseudo_dir.rsplit("\\", 1)[-1],
-            "library",
-        )
-        self.assertEqual(
-            calculator.parameters["pseudopotentials"]["Al"],
-            "Al.us.pbe.z_3.ld1.psl.v1.0.0-low.upf",
-        )
-        self.assertEqual(calculator.parameters["input_data"]["system"]["ecutwfc"], 30.0)
-        self.assertEqual(calculator.parameters["input_data"]["system"]["ecutrho"], 60.0)
+    def test_dft_cannot_fall_back_to_a_local_calculator(self):
+        with self.assertRaisesRegex(RuntimeError, "remote VASP Slurm workflow"):
+            create_calculator("Aluminum", "DFT")
 
 
 if __name__ == "__main__":

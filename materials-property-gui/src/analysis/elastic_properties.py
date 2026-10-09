@@ -1,5 +1,4 @@
 import os
-import json
 import re
 import shlex
 import shutil
@@ -14,9 +13,6 @@ from scipy.optimize import curve_fit
 EV_A3_TO_GPA = 160.21766208
 STRAINS = np.array([-0.005, -0.0025, -0.001, 0.001, 0.0025, 0.005])
 DATA_DIRECTORY = Path(__file__).resolve().parents[1] / "data"
-SSSP_DIRECTORY = DATA_DIRECTORY / "potentials" / "sssp-pbe-eff-lib-v2"
-SSSP_LIBRARY_DIRECTORY = SSSP_DIRECTORY / "library"
-SSSP_CUTOFFS_FILE = SSSP_DIRECTORY / "cutoffs.json"
 REFERENCE_LATTICE_PARAMETERS = {"Al": 4.05, "Cu": 3.615, "Si": 5.43}
 CRYSTAL_STRUCTURES = {
     "fcc": "fcc",
@@ -237,11 +233,7 @@ def _create_calculator(
     meam_parameter_file,
     meam_pair_coeff,
     meam_library_element,
-    dft_pseudo_dir,
-    dft_pseudopotential,
-    espresso_command,
     lammps_command,
-    espresso_kpts,
 ):
     if method == "MACE-MP":
         try:
@@ -407,86 +399,7 @@ def _create_calculator(
         )
 
     if method == "DFT":
-        configured_pseudo_directory = dft_pseudo_dir or os.getenv("ESPRESSO_PSEUDO_DIR")
-        if configured_pseudo_directory:
-            pseudo_directory = Path(configured_pseudo_directory).expanduser().resolve()
-        elif SSSP_LIBRARY_DIRECTORY.is_dir():
-            pseudo_directory = SSSP_LIBRARY_DIRECTORY.resolve()
-        else:
-            pseudo_directory = (DATA_DIRECTORY / "pseudopotentials").resolve()
-        if pseudo_directory.is_dir() and not any(pseudo_directory.glob("*.upf")):
-            nested_library = pseudo_directory / "library"
-            if nested_library.is_dir():
-                pseudo_directory = nested_library
-        if not pseudo_directory.is_dir():
-            raise FileNotFoundError(
-                "Quantum ESPRESSO pseudopotential directory not found. Set ESPRESSO_PSEUDO_DIR "
-                f"or create {pseudo_directory}."
-            )
-
-        pseudo_name = dft_pseudopotential or os.getenv(f"DFT_PSEUDO_{symbol.upper()}")
-        if pseudo_name is None:
-            candidates = sorted(
-                path for path in pseudo_directory.iterdir()
-                if path.is_file()
-                and path.suffix.lower() == ".upf"
-                and path.name.lower().startswith(symbol.lower())
-            )
-            if len(candidates) == 1:
-                pseudo_name = candidates[0].name
-            elif not candidates:
-                raise FileNotFoundError(
-                    f"No {symbol} .UPF pseudopotential found in {pseudo_directory}. "
-                    f"Set DFT_PSEUDO_{symbol.upper()} to its filename."
-                )
-            else:
-                names = ", ".join(path.name for path in candidates)
-                raise ValueError(
-                    f"Multiple {symbol} pseudopotentials found ({names}); "
-                    f"select one with DFT_PSEUDO_{symbol.upper()}."
-                )
-        pseudo_path = (pseudo_directory / pseudo_name).resolve()
-        if not pseudo_path.is_file() or pseudo_path.parent != pseudo_directory:
-            raise FileNotFoundError(f"DFT pseudopotential file not found in {pseudo_directory}: {pseudo_name}")
-
-        command = espresso_command or os.getenv("ESPRESSO_COMMAND", "pw.x")
-        if not shutil.which(command) and not Path(command).is_file():
-            raise RuntimeError(
-                f"Quantum ESPRESSO executable {command!r} was not found. Install it and set "
-                "ESPRESSO_COMMAND to its executable path."
-            )
-        try:
-            from ase.calculators.espresso import Espresso, EspressoProfile
-        except ImportError as error:
-            raise RuntimeError("DFT calculations require ASE; install it with 'python -m pip install ase'.") from error
-
-        cutoff_metadata = {}
-        if SSSP_CUTOFFS_FILE.is_file():
-            cutoff_metadata = json.loads(SSSP_CUTOFFS_FILE.read_text(encoding="utf-8"))
-        element_cutoffs = cutoff_metadata.get(symbol, {})
-        cutoff_wfc = float(os.getenv(
-            "DFT_ECUTWFC_RY",
-            element_cutoffs.get("cutoff_wfc", 60),
-        ))
-        cutoff_rho = float(os.getenv(
-            "DFT_ECUTRHO_RY",
-            element_cutoffs.get("cutoff_rho", 480),
-        ))
-
-        profile = EspressoProfile(command=command, pseudo_dir=str(pseudo_directory))
-        return Espresso(
-            profile=profile,
-            pseudopotentials={symbol: pseudo_path.name},
-            input_data={
-                "control": {"calculation": "scf", "tstress": True, "tprnfor": True},
-                "system": {
-                    "ecutwfc": cutoff_wfc,
-                    "ecutrho": cutoff_rho,
-                },
-                "electrons": {"conv_thr": 1.0e-8},
-            },
-            kpts=espresso_kpts,
-        )
+        raise RuntimeError("DFT calculations use the remote VASP Slurm workflow.")
 
     raise ValueError(f"Unsupported method: {method}")
 
@@ -503,21 +416,19 @@ def compute_elastic_properties(
     meam_parameter_file=None,
     meam_pair_coeff=None,
     meam_library_element=None,
-    dft_pseudo_dir=None,
-    dft_pseudopotential=None,
-    espresso_command=None,
     lammps_command=None,
-    espresso_kpts=(8, 8, 8),
     calculator=None,
 ):
     """Run cubic EOS and small-strain stress calculations using an ASE calculator.
 
-    MEAM uses LAMMPS and user-supplied potential files. DFT uses Quantum ESPRESSO
-    and a user-selected UPF pseudopotential.
+    MEAM uses LAMMPS and user-supplied potential files. DFT is executed remotely
+    through the VASP workflow and is not an ASE calculator in this function.
     """
     material_name, symbol = _normalize_material(material)
     crystal_structure = _normalize_structure(lattice_structure)
     method_name = _normalize_method(method)
+    if method_name == "DFT":
+        raise RuntimeError("DFT calculations use calculate_remote_dft_report and remote VASP.")
     if method_name == "MACE-MP":
         model = mace_model_for_method(method, model)
 
@@ -535,11 +446,7 @@ def compute_elastic_properties(
             meam_parameter_file,
             meam_pair_coeff,
             meam_library_element,
-            dft_pseudo_dir,
-            dft_pseudopotential,
-            espresso_command,
             lammps_command,
-            espresso_kpts,
         )
 
     if lattice_parameters is None:
@@ -656,11 +563,7 @@ def create_calculator(
     meam_parameter_file=None,
     meam_pair_coeff=None,
     meam_library_element=None,
-    dft_pseudo_dir=None,
-    dft_pseudopotential=None,
-    espresso_command=None,
     lammps_command=None,
-    espresso_kpts=(8, 8, 8),
 ):
     """Create the requested ASE calculator for reuse across related calculations."""
     _, symbol = _normalize_material(material)
@@ -675,11 +578,7 @@ def create_calculator(
         meam_parameter_file,
         meam_pair_coeff,
         meam_library_element,
-        dft_pseudo_dir,
-        dft_pseudopotential,
-        espresso_command,
         lammps_command,
-        espresso_kpts,
     )
 
 

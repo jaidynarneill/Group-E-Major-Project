@@ -11,10 +11,10 @@ def _cluster_inspection_command():
     script = "\n".join((
         f"module use {shlex.quote(MODULEFILE_DIRECTORY)}",
         f"module load {shlex.quote(VASP_MODULE)}",
-        "printf 'VASP_EXECUTABLE='; command -v vasp_std || true",
-        "printf 'PYTHON_EXECUTABLE='; command -v python3 || true",
-        "python3 -c 'import ase, numpy, scipy; print(\"PYTHON_PACKAGES=ase,numpy,scipy available\")' 2>&1 || true",
-        f"find {shlex.quote(REMOTE_SCRATCH_DIRECTORY)} -maxdepth 4 -type f -name POTCAR -print 2>/dev/null | head -20",
+        "printf 'VASP_EXECUTABLE='; command -v vasp_std || true; printf '\\n'",
+        "printf 'VASP_PP_PATH=%s\\n' \"${VASP_PP_PATH:-}\"",
+        f"printf 'STAGING_DIRECTORY={shlex.quote(REMOTE_SCRATCH_DIRECTORY)}\\n'",
+        "if [ -n \"${VASP_PP_PATH:-}\" ]; then find \"$VASP_PP_PATH\" -maxdepth 6 -type f -name POTCAR -print 2>/dev/null | head -20; fi",
     ))
     return "bash -lc " + shlex.quote(script)
 

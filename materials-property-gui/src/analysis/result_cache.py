@@ -10,7 +10,6 @@ import numpy as np
 try:
     from analysis.elastic_properties import (
         DATA_DIRECTORY,
-        SSSP_LIBRARY_DIRECTORY,
         _normalize_material,
         _normalize_method,
         _normalize_structure,
@@ -21,7 +20,6 @@ except ModuleNotFoundError as error:
         raise
     from src.analysis.elastic_properties import (
         DATA_DIRECTORY,
-        SSSP_LIBRARY_DIRECTORY,
         _normalize_material,
         _normalize_method,
         _normalize_structure,
@@ -37,14 +35,6 @@ MEAM_ENVIRONMENT = (
     "MEAM_LIBRARY_ELEMENT",
     "LAMMPS_COMMAND",
 )
-DFT_ENVIRONMENT = (
-    "ESPRESSO_COMMAND",
-    "ESPRESSO_PSEUDO_DIR",
-    "DFT_ECUTWFC_RY",
-    "DFT_ECUTRHO_RY",
-)
-
-
 def _cache_directory():
     configured_directory = os.getenv("MATERIALS_PROPERTY_CACHE")
     if configured_directory:
@@ -74,16 +64,7 @@ def _source_signatures(method, symbol):
         paths = list(potential_directory.glob("*.meam"))
         configured_paths = [os.getenv(name) for name in MEAM_ENVIRONMENT[:2]]
     elif method == "DFT":
-        pseudo_directory = Path(
-            os.getenv("ESPRESSO_PSEUDO_DIR") or SSSP_LIBRARY_DIRECTORY
-        ).expanduser()
-        paths = list(pseudo_directory.glob(f"{symbol}*.upf"))
-        paths.append(DATA_DIRECTORY / "potentials" / "sssp-pbe-eff-lib-v2" / "cutoffs.json")
-        configured_pseudo = os.getenv(f"DFT_PSEUDO_{symbol.upper()}")
-        if configured_pseudo:
-            pseudo_path = Path(configured_pseudo).expanduser()
-            paths.append(pseudo_path if pseudo_path.is_absolute() else pseudo_directory / pseudo_path)
-        configured_paths = []
+        return []
     else:
         return []
 
@@ -104,8 +85,15 @@ def _cache_identity(material, lattice_structure, method):
     method_name = _normalize_method(method)
     model = mace_model_for_method(method) if method_name == "MACE-MP" else None
     environment_names = MEAM_ENVIRONMENT if method_name == "MEAM" else ()
+    backend = None
     if method_name == "DFT":
-        environment_names = (*DFT_ENVIRONMENT, f"DFT_PSEUDO_{symbol.upper()}")
+        try:
+            from dft.vasp_workflow import VASP_CACHE_BACKEND
+        except ModuleNotFoundError as error:
+            if error.name != "dft":
+                raise
+            from src.dft.vasp_workflow import VASP_CACHE_BACKEND
+        backend = VASP_CACHE_BACKEND
     identity = {
         "version": CACHE_VERSION,
         "material": material_name,
@@ -113,6 +101,7 @@ def _cache_identity(material, lattice_structure, method):
         "lattice": _normalize_structure(lattice_structure),
         "method": method_name,
         "model": model,
+        "backend": backend,
         "environment": {name: os.getenv(name) for name in environment_names},
         "sources": _source_signatures(method_name, symbol),
     }

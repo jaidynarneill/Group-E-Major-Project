@@ -33,8 +33,10 @@ except ModuleNotFoundError as error:
 class ClusterConnectionDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Test VASP cluster connection")
+        self.setWindowTitle("DFT cluster credentials")
         self.setMinimumWidth(560)
+        self.cluster_report = None
+        self.credentials = None
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -51,7 +53,7 @@ class ClusterConnectionDialog(QDialog):
         form.addRow("Scratch staging folder", QLabel(REMOTE_SCRATCH_DIRECTORY))
         layout.addLayout(form)
 
-        self.status_label = QLabel("Tests login and inspects cluster support; does not submit jobs.")
+        self.status_label = QLabel("Credentials are requested only for enabled DFT runs. No password is saved.")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
@@ -61,13 +63,11 @@ class ClusterConnectionDialog(QDialog):
         self.details.setPlaceholderText("Cluster inspection details will appear here.")
         layout.addWidget(self.details)
 
-        self.test_button = QPushButton("Test Connection")
-        self.test_button.clicked.connect(self.test_connection)
-        layout.addWidget(self.test_button)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons = QDialogButtonBox()
+        self.connect_button = buttons.addButton("Connect", QDialogButtonBox.AcceptRole)
+        self.connect_button.clicked.connect(self.test_connection)
+        buttons.addButton(QDialogButtonBox.Cancel)
         buttons.rejected.connect(self.reject)
-        buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)
 
     def test_connection(self):
@@ -75,7 +75,7 @@ class ClusterConnectionDialog(QDialog):
         password = self.password_input.text()
         self.details.clear()
         self.status_label.setText("Connecting and checking the cluster...")
-        self.test_button.setEnabled(False)
+        self.connect_button.setEnabled(False)
         QApplication.processEvents()
         try:
             report = inspect_cluster(username, password)
@@ -87,19 +87,27 @@ class ClusterConnectionDialog(QDialog):
             self.status_label.setText("Connection or inspection failed.")
             self.details.setPlainText(message)
         else:
+            self.cluster_report = report
+            self.credentials = (username, password)
             self.status_label.setText("SSH login succeeded. No jobs were submitted.")
             lines = [
                 f"Host: {report['host']}",
                 f"Scratch directory: {report['scratch_directory']}",
                 "Scratch directory entries:",
                 *(f"  {entry}" for entry in report["scratch_entries"]),
-                "VASP/Python inspection output:",
+                "VASP module and POTCAR inspection output:",
                 report["command_output"] or "(no stdout)",
             ]
             if report["command_errors"]:
                 lines.extend(("Inspection stderr:", report["command_errors"]))
             lines.append(f"Inspection exit status: {report['command_exit_status']}")
             self.details.setPlainText("\n".join(lines))
+            self.accept()
         finally:
             self.password_input.clear()
-            self.test_button.setEnabled(True)
+            self.connect_button.setEnabled(True)
+
+    def take_credentials(self):
+        credentials = self.credentials
+        self.credentials = None
+        return credentials

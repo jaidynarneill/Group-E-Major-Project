@@ -50,15 +50,23 @@ except ModuleNotFoundError as error:
     from src.ui.cluster_connection_dialog import ClusterConnectionDialog
 
 
+def configurations_need_cluster_login(configurations):
+    return any(
+        str(method).strip().upper() == "DFT"
+        for _, _, _, method in configurations
+    )
+
+
 class CalculationWorker(QObject):
     progress = pyqtSignal(str)
     completed = pyqtSignal(object, object)
     finished = pyqtSignal()
 
-    def __init__(self, configurations):
+    def __init__(self, configurations, cluster_credentials=None):
         super().__init__()
         self.configurations = configurations
         self.result_cache = CalculationResultCache()
+        self.cluster_credentials = cluster_credentials
 
     @pyqtSlot()
     def run(self):
@@ -79,38 +87,61 @@ class CalculationWorker(QObject):
 
                 self.progress.emit(f"Calculating {label}...")
                 try:
-                    model = mace_model_for_method(method)
-                    calculator = create_calculator(material, method, model=model)
-                    result = compute_elastic_properties(
-                        material,
-                        lattice,
-                        method,
-                        model=model,
-                        calculator=calculator,
-                    )
-                    try:
-                        result["surface_energy_data"] = compute_surface_energies(
+                    if method.strip().upper() == "DFT":
+                        if self.cluster_credentials is None:
+                            raise RuntimeError("DFT requires an authenticated VASP cluster connection.")
+                        try:
+                            from dft.vasp_workflow import calculate_remote_dft_report
+                        except ModuleNotFoundError as error:
+                            if error.name != "dft":
+                                raise
+                            from src.dft.vasp_workflow import calculate_remote_dft_report
+                        username, password = self.cluster_credentials
+                        result = calculate_remote_dft_report(
+                            material,
+                            lattice,
+                            username,
+                            password,
+                            progress=self.progress.emit,
+                        )
+                    else:
+                        model = mace_model_for_method(method)
+                        calculator = create_calculator(material, method, model=model)
+                        result = compute_elastic_properties(
                             material,
                             lattice,
                             method,
-                            calculator=calculator,
-                            bulk_energy_per_atom=result["E0_atom"],
-                            lattice_parameter=result["a0"],
                             model=model,
+                            calculator=calculator,
                         )
-                    except Exception as error:
-                        result["surface_energy_data"] = {"surfaces": []}
-                        errors.append(f"{label} surface energies: {error}")
-                    else:
                         try:
-                            self.result_cache.save(material, lattice, method, result)
+                            result["surface_energy_data"] = compute_surface_energies(
+                                material,
+                                lattice,
+                                method,
+                                calculator=calculator,
+                                bulk_energy_per_atom=result["E0_atom"],
+                                lattice_parameter=result["a0"],
+                                model=model,
+                            )
                         except Exception as error:
-                            errors.append(f"{label} cache save: {error}")
+                            result["surface_energy_data"] = {"surfaces": []}
+                            errors.append(f"{label} surface energies: {error}")
                     results.append((label, result))
+                    try:
+                        self.result_cache.save(material, lattice, method, result)
+                    except Exception as error:
+                        errors.append(f"{label} cache save: {error}")
                 except Exception as error:
-                    errors.append(f"{label}: {error}")
+                    message = str(error)
+                    if self.cluster_credentials is not None:
+                        for secret in self.cluster_credentials:
+                            if secret:
+                                message = message.replace(secret, "[redacted]")
+                    errors.append(f"{label}: {message}")
             self.completed.emit(results, errors)
         finally:
+            self.cluster_credentials = None
             self.finished.emit()
 
 
@@ -212,14 +243,9 @@ class PlotPanel(QWidget):
 
         layout.addWidget(config_box)
 
-        actions = QHBoxLayout()
         self.run_button = QPushButton("Run")
         self.run_button.clicked.connect(self.run_calculations)
-        self.cluster_test_button = QPushButton("Test VASP cluster")
-        self.cluster_test_button.clicked.connect(self.test_vasp_cluster)
-        actions.addWidget(self.run_button)
-        actions.addWidget(self.cluster_test_button)
-        layout.addLayout(actions)
+        layout.addWidget(self.run_button)
 
         results_box = QGroupBox("Results")
         results_layout = QVBoxLayout(results_box)
@@ -354,10 +380,6 @@ class PlotPanel(QWidget):
         if previous_value in options:
             dropdown.setCurrentText(previous_value)
 
-    def test_vasp_cluster(self):
-        dialog = ClusterConnectionDialog(self)
-        dialog.exec_()
-
     def show_empty_plots(self, message="Run a configuration to calculate plots."):
         colors = self.theme_colors
         self.figure.clear()
@@ -407,12 +429,23 @@ class PlotPanel(QWidget):
             self.status_label.setText("Enable at least one configuration before running.")
             return
 
+        if configurations_need_cluster_login(configurations):
+            dialog = ClusterConnectionDialog(self)
+            if dialog.exec_() != dialog.Accepted:
+                return
+            cluster_credentials = dialog.take_credentials()
+            if cluster_credentials is None:
+                self.status_label.setText("Cluster credentials were not available; no calculations were started.")
+                return
+        else:
+            cluster_credentials = None
+
         self.run_button.setEnabled(False)
         self.status_label.setText("Starting calculations...")
         self.result_output.clear()
 
         self._thread = QThread(self)
-        self._worker = CalculationWorker(configurations)
+        self._worker = CalculationWorker(configurations, cluster_credentials)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self.status_label.setText)

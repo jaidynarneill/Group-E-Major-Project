@@ -61,7 +61,7 @@ python -m pip install -r requirements-build.txt
 .\build_windows.ps1
 ```
 
-The executable is `dist/MaterialsPropertyGUI/MaterialsPropertyGUI.exe`; keep the `dist/MaterialsPropertyGUI` folder together when moving or sharing the build. This bundles the GUI, Python packages, and `src/data`. LAMMPS and Quantum ESPRESSO are external programs and must be installed/configured separately. MACE downloads its selected checkpoint the first time it runs, so that first calculation needs internet access.
+The executable is `dist/MaterialsPropertyGUI/MaterialsPropertyGUI.exe`; keep the `dist/MaterialsPropertyGUI` folder together when moving or sharing the build. This bundles the GUI, Python packages, `src/data`, and the Slurm launcher. LAMMPS and the VASP cluster are external. MACE downloads its selected checkpoint the first time it runs, so that first calculation needs internet access.
 
 ## Elastic Calculation Backends
 
@@ -69,11 +69,13 @@ The elastic-properties module performs EOS and small-strain stress calculations 
 
 Surface energies are calculated from relaxed ASE slabs for the low-index (100), (110), and (111) orientations. The reported value is `gamma = (E_slab - N * E_bulk) / (2 * A)` in eV/Å², where `A` is one exposed face area; the factor of two accounts for both slab faces. Slabs default to 8 layers, 10 Å vacuum, and a 0.05 eV/Å force tolerance. These are starting settings and should be checked for slab-thickness and relaxation convergence before reporting results.
 
-DFT uses Quantum ESPRESSO through ASE. The GUI automatically finds the selected element's UPF under `src/data/potentials/sssp-pbe-eff-lib-v2/library/` and reads recommended `ecutwfc`/`ecutrho` values from the accompanying `cutoffs.json`. Override the executable with `ESPRESSO_COMMAND`, the pseudo directory with `ESPRESSO_PSEUDO_DIR`, or cutoffs with `DFT_ECUTWFC_RY` and `DFT_ECUTRHO_RY`. The matching SSSP pseudopotential is selected by element symbol; `DFT_PSEUDO_AL` (and equivalents) can select another file if multiple UPFs are supplied. Converge cutoffs and k-point sampling for the chosen system before reporting results.
+DFT runs remotely through VASP 6.4.2 on `m3.massive.org.au`. The username and masked password are requested only when **Run** includes an enabled DFT row. The app uses the configured module files at `/projects/lh36/sdwi0002/opt/modulefiles`, requires `vasp_std`, Slurm, and a PBE POTCAR for the selected element under `VASP_PP_PATH`. The app creates 13 EOS calculations, 12 elastic-strain calculations, and three relaxed low-index slabs, then returns the same report and plots used by the local methods. It derives `ENCUT` as 1.3 times the POTCAR's `ENMAX`, uses 8x8x8 bulk and 8x8x1 slab k-point meshes, and requests 16 MPI tasks for up to two hours per Slurm phase. Check convergence and magnetic settings for each material before treating values as publication-quality.
 
-Completed calculation results, including the data used for plots and the printed report, are cached by material, lattice, and method/model. Source runs store the cache under `%LOCALAPPDATA%\MaterialsPropertyGUI\calculations` on Windows, or `$XDG_CACHE_HOME/MaterialsPropertyGUI/calculations` on other platforms (`~/.cache` is used when `XDG_CACHE_HOME` is unset). Packaged Windows builds store it in a `calculations` folder beside the executable, so moving the complete app folder also moves its cache. Set `MATERIALS_PROPERTY_CACHE` to use another directory. Changing the method settings or potential/pseudopotential files creates a separate cache entry.
+Inputs and outputs are staged temporarily under `/fs04/scratch2/he41/temp_runs/jp_script/vasp/materials-property-<id>`. The app downloads the VASP outputs, assembles the report locally, and removes that temporary directory. POTCAR contents are never downloaded to the laptop or stored in the cache. The SSH server must already be trusted in the user's SSH known-hosts file.
 
-The SSSP pseudopotentials and LAMMPS executable are present in this workspace. Quantum ESPRESSO (`pw.x`) is not installed in the current environment, so DFT calculator inputs are configured but cannot run until `pw.x` is installed and available on `PATH` or configured with `ESPRESSO_COMMAND`. For example:
+Completed calculation results, including the data used for plots and the printed report, are cached by material, lattice, method, and model/backend. Source runs store the cache under `%LOCALAPPDATA%\MaterialsPropertyGUI\calculations` on Windows, or `$XDG_CACHE_HOME/MaterialsPropertyGUI/calculations` on other platforms (`~/.cache` is used when `XDG_CACHE_HOME` is unset). Packaged Windows builds store it in a `calculations` folder beside the executable, so moving the complete app folder also moves its cache. Set `MATERIALS_PROPERTY_CACHE` to use another directory. DFT cache entries identify the VASP backend and workflow settings; credentials and remote job files are not cached.
+
+For example, the shared local analysis API remains available for non-DFT calculators:
 
 ```python
 from src.analysis.elastic_properties import compute_elastic_properties

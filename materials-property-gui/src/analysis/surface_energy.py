@@ -5,6 +5,7 @@ try:
         DATA_DIRECTORY,
         REFERENCE_LATTICE_PARAMETERS,
         _normalize_material,
+        _normalize_method,
         _normalize_structure,
         create_calculator,
     )
@@ -15,6 +16,7 @@ except ModuleNotFoundError as error:
         DATA_DIRECTORY,
         REFERENCE_LATTICE_PARAMETERS,
         _normalize_material,
+        _normalize_method,
         _normalize_structure,
         create_calculator,
     )
@@ -65,6 +67,9 @@ def compute_surface_energies(
         raise RuntimeError("Surface-energy calculations require ASE; install it with 'python -m pip install ase'.") from error
 
     material_name, symbol = _normalize_material(material)
+    method_name = _normalize_method(method)
+    if method_name == "DFT":
+        raise RuntimeError("DFT surface energies use the remote VASP workflow.")
     crystal_structure = _normalize_structure(lattice_structure)
     if crystal_structure not in SURFACE_ORIENTATIONS:
         raise ValueError(f"No surface-orientation defaults are configured for {lattice_structure!r}.")
@@ -79,7 +84,6 @@ def compute_surface_energies(
             material_name,
             method,
             model=model,
-            espresso_kpts=(8, 8, 8),
             **calculator_options,
         )
 
@@ -89,10 +93,6 @@ def compute_surface_energies(
     if bulk_energy_per_atom is None:
         bulk_atoms.calc = calculator
         bulk_energy_per_atom = bulk_atoms.get_potential_energy() / len(bulk_atoms)
-
-    method_name = str(method).strip().upper().replace("_", "-")
-    if method_name == "DFT" and hasattr(calculator, "set"):
-        calculator.set(kpts=(8, 8, 1))
 
     surfaces = []
     for indices in selected_orientations:

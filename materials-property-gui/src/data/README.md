@@ -7,8 +7,8 @@
    - Data formats may vary, including CSV, JSON, or plain text files.
 
 2. **Elastic Properties**:
-   - Elastic constants are derived from simulations using many-body potentials (MEAM and S-W) and Density Functional Theory (DFT).
-   - The results are typically stored in structured text files, with columns representing different properties.
+   - Elastic constants are derived locally using MEAM/MACE or remotely using VASP for DFT.
+   - VASP POTCAR files remain on the cluster; the GUI stages temporary calculation inputs and retrieves output data for the report.
 
 ## Data Formats
 
