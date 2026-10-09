@@ -9,6 +9,7 @@
 set -euo pipefail
 
 module use /projects/lh36/sdwi0002/opt/modulefiles
+module load hpcx-ompi hpcx/.2.14-redhat9.2-patch1 hdf5/1.12.3 wannier90/3.1.0-mpi
 module load vasp/6.4.2
 
 export I_MPI_HYDRA_BOOTSTRAP=slurm
