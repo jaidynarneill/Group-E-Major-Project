@@ -6,6 +6,7 @@ from src.ui.plot_panel import CalculationWorker, configurations_need_cluster_log
 from src.ui.cluster_connection_dialog import (
     CREDENTIAL_ACCOUNT,
     CREDENTIAL_SERVICE,
+    _clear_saved_credentials,
     _load_saved_credentials,
     _save_credentials,
 )
@@ -17,6 +18,7 @@ class TestClusterRunGating(unittest.TestCase):
         keyring = ModuleType("keyring")
         keyring.get_password = lambda service, account: entries.get((service, account))
         keyring.set_password = lambda service, account, value: entries.__setitem__((service, account), value)
+        keyring.delete_password = lambda service, account: entries.pop((service, account), None)
 
         with patch.dict("sys.modules", {"keyring": keyring}):
             _save_credentials("student", "secret")
@@ -31,6 +33,19 @@ class TestClusterRunGating(unittest.TestCase):
         keyring.get_password = lambda service, account: "not valid credential json"
         with patch.dict("sys.modules", {"keyring": keyring}):
             self.assertIsNone(_load_saved_credentials())
+
+    def test_unchecking_remember_me_clears_saved_credentials(self):
+        entries = {(CREDENTIAL_SERVICE, CREDENTIAL_ACCOUNT): '{"username":"student","password":"secret"}'}
+        keyring = ModuleType("keyring")
+        keyring.get_password = lambda service, account: entries.get((service, account))
+        keyring.delete_password = lambda service, account: entries.pop((service, account), None)
+
+        with patch.dict("sys.modules", {"keyring": keyring}):
+            _clear_saved_credentials()
+            loaded = _load_saved_credentials()
+
+        self.assertIsNone(loaded)
+        self.assertEqual(entries, {})
 
     def test_local_only_run_does_not_require_cluster_login(self):
         configurations = [
