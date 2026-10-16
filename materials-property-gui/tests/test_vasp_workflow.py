@@ -91,6 +91,19 @@ class TestVaspWorkflow(unittest.TestCase):
         self.assertNotIn("EDIFFG", eos_incar)
         self.assertAlmostEqual(eos_tasks[0]["lattice_parameter"], 3.5133144702592642 * 0.97)
 
+    def test_aluminum_surface_relaxation_uses_auto_real_space_projectors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tasks = build_followup_tasks("Al", "fcc", 4.05, directory)
+            surface_directory = Path(directory) / "surface_100"
+            incar = (surface_directory / "INCAR.template").read_text(encoding="ascii")
+            kpoints = (surface_directory / "KPOINTS").read_text(encoding="ascii")
+
+        surface_task = next(task for task in tasks if task["name"] == "surface_100")
+        self.assertEqual(surface_task["atom_count"], 32)
+        self.assertIn("LREAL = Auto", incar)
+        self.assertIn("ISIF = 2", incar)
+        self.assertIn("Gamma\n8 8 1\n", kpoints)
+
     def test_remote_preflight_requires_vasp_and_potgen(self):
         with patch(
             "src.dft.vasp_workflow._remote_command",

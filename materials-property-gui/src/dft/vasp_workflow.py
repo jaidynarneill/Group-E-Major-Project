@@ -123,7 +123,7 @@ def _write_vasp_task(directory, atoms, *, relax=False, relax_cell=False):
         "EDIFF = 2E-4" if relax else "EDIFF = 1E-8",
         "ISMEAR = 0",
         "SIGMA = 0.05",
-        "LREAL = .FALSE.",
+        "LREAL = Auto" if relax else "LREAL = .FALSE.",
         "LASPH = .TRUE.",
         "ISYM = 0",
         f"ISIF = {3 if relax_cell else 2}",
