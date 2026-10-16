@@ -128,7 +128,7 @@ class TestVaspWorkflow(unittest.TestCase):
         self.assertEqual(surface_task["atom_count"], 32)
         self.assertIn("LREAL = .FALSE.", incar)
         self.assertIn("AMIN = 0.01", incar)
-        self.assertIn("KPAR = 4", incar)
+        self.assertNotIn("KPAR", incar)
         self.assertIn("ISIF = 2", incar)
         self.assertIn("Gamma\n8 8 1\n", kpoints)
 

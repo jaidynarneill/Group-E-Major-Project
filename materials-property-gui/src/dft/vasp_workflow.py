@@ -147,7 +147,6 @@ def _write_vasp_task(directory, atoms, *, relax=False, relax_cell=False):
         incar.append(f"EDIFFG = -{VASP_SURFACE_FMAX}")
         if not relax_cell:
             incar.append("AMIN = 0.01")
-            incar.append("KPAR = 4")
     (directory / "INCAR.template").write_text("\n".join(incar) + "\n", encoding="ascii")
 
 
