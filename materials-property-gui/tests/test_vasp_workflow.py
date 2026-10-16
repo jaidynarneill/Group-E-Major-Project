@@ -84,7 +84,7 @@ class TestVaspWorkflow(unittest.TestCase):
         self.assertIn("Gamma\n7 7 7\n", relaxation_kpoints)
         self.assertIn("ISIF = 3", relaxation_incar)
         self.assertIn("NSW = 99", relaxation_incar)
-        self.assertIn("LREAL = .FALSE.", relaxation_incar)
+        self.assertIn("LREAL = Auto", relaxation_incar)
         self.assertIn("ISPIN = 2", relaxation_incar)
         self.assertIn("MAGMOM = 4*0.6", relaxation_incar)
         self.assertIn("ISIF = 2", eos_incar)

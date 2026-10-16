@@ -12,7 +12,6 @@ module use /projects/lh36/sdwi0002/opt/modulefiles
 module load vasp/6.6.1
 
 export I_MPI_HYDRA_BOOTSTRAP=slurm
-ulimit -s unlimited
 
 element=$(<.element)
 cd "$SLURM_SUBMIT_DIR"

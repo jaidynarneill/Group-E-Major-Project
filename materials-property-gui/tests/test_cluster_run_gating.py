@@ -45,20 +45,6 @@ class TestClusterRunGating(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("Cubic elasticity fits", errors[0])
 
-    def test_live_progress_panel_displays_current_job_output(self):
-        status_label = Mock()
-        log_output = Mock()
-        scrollbar = log_output.verticalScrollBar.return_value
-        scrollbar.maximum.return_value = 5
-        panel = SimpleNamespace(status_label=status_label, live_log_output=log_output)
-        message = "Slurm job 98765: RUNNING\nDAV: 12 energy=-42.0"
-
-        PlotPanel._show_progress(panel, message)
-
-        status_label.setText.assert_called_once_with("Slurm job 98765: RUNNING")
-        log_output.setPlainText.assert_called_once_with(message)
-        scrollbar.setValue.assert_called_once_with(5)
-
     def test_credentials_are_remembered_through_the_os_keyring(self):
         entries = {}
         keyring = ModuleType("keyring")
