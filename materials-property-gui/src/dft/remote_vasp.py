@@ -5,7 +5,6 @@ import re
 SSH_HOST = "m3.massive.org.au"
 MODULEFILE_DIRECTORY = "/projects/lh36/sdwi0002/opt/modulefiles"
 REMOTE_SCRATCH_DIRECTORY = "/fs04/scratch2/lh36/jarn0012/vasp"
-REMOTE_SLURM_DIRECTORY = f"{REMOTE_SCRATCH_DIRECTORY.rstrip('/')}/slurm"
 VASP_MODULE = "vasp/6.6.1"
 MODULE_INIT_SCRIPT = "/etc/profile.d/modules.sh"
 
@@ -86,7 +85,6 @@ def inspect_cluster(username, password, client_factory=None):
         return {
             "host": SSH_HOST,
             "scratch_directory": REMOTE_SCRATCH_DIRECTORY,
-            "slurm_log_directory": REMOTE_SLURM_DIRECTORY,
             "scratch_entries": entries,
             "command_output": output,
             "command_errors": errors,

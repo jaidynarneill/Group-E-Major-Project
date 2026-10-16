@@ -6,7 +6,6 @@ from unittest.mock import Mock
 from src.dft.remote_vasp import (
     MODULEFILE_DIRECTORY,
     REMOTE_SCRATCH_DIRECTORY,
-    REMOTE_SLURM_DIRECTORY,
     SSH_HOST,
     VASP_MODULE,
     inspect_cluster,
@@ -19,20 +18,15 @@ class TestRemoteVaspInspection(unittest.TestCase):
         launcher_bytes = launcher.read_bytes()
 
         self.assertTrue(launcher_bytes.startswith(b"#!/bin/bash\n"))
-        self.assertIn(
-            f"#SBATCH --output={REMOTE_SLURM_DIRECTORY}/%x-%j.out".encode("ascii"),
-            launcher_bytes,
-        )
-        self.assertIn(
-            f"#SBATCH --error={REMOTE_SLURM_DIRECTORY}/%x-%j.err".encode("ascii"),
-            launcher_bytes,
-        )
+        self.assertIn(b"#SBATCH --output=slurm-%x-%j.out", launcher_bytes)
+        self.assertIn(b"#SBATCH --error=slurm-%x-%j.err", launcher_bytes)
         launcher = launcher_bytes.decode("ascii")
         self.assertIn("module use /projects/lh36/sdwi0002/opt/modulefiles", launcher)
         self.assertIn("module load vasp/6.6.1", launcher)
         self.assertNotIn("module load hpcx", launcher)
         self.assertNotIn("module load hdf5", launcher)
         self.assertNotIn("module load wannier90", launcher)
+        self.assertNotIn("/vasp/slurm/", launcher)
 
     def test_inspection_authenticates_and_reports_remote_capabilities(self):
         client = Mock()
@@ -68,7 +62,7 @@ class TestRemoteVaspInspection(unittest.TestCase):
         self.assertIn("command -v potgen", command)
         self.assertLess(command.index("module use"), command.index("module load vasp/6.6.1"))
         self.assertIn(REMOTE_SCRATCH_DIRECTORY, command)
-        self.assertEqual(report["slurm_log_directory"], REMOTE_SLURM_DIRECTORY)
+        self.assertNotIn("slurm_log_directory", report)
         self.assertEqual(report["scratch_entries"], ["POTCAR", "run.sh"])
         self.assertNotIn("secret", repr(report))
         sftp.close.assert_called_once()

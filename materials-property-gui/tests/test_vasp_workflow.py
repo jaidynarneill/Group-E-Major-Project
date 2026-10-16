@@ -10,6 +10,8 @@ from src.analysis.elastic_properties import EV_A3_TO_GPA, birch_murnaghan
 from src.dft.vasp_workflow import (
     _assemble_report,
     _job_log_tail_command,
+    _remote_material_directory,
+    _remote_run_directory,
     _stage_phase,
     _validate_remote_environment,
     _wait_for_job,
@@ -21,6 +23,16 @@ from src.dft.remote_vasp import VASP_MODULE
 
 
 class TestVaspWorkflow(unittest.TestCase):
+    def test_material_named_run_directories_allow_reruns(self):
+        material_directory = _remote_material_directory("Aluminum")
+        first_run = _remote_run_directory("Aluminum", "run-one")
+        second_run = _remote_run_directory("Aluminum", "run-two")
+
+        self.assertTrue(material_directory.endswith("/Aluminum-Dft"))
+        self.assertTrue(first_run.startswith(material_directory + "/run-"))
+        self.assertTrue(second_run.startswith(material_directory + "/run-"))
+        self.assertNotEqual(first_run, second_run)
+
     def test_job_poller_emits_current_log_tail_to_progress_callback(self):
         client = Mock()
         progress = Mock()
@@ -46,8 +58,8 @@ class TestVaspWorkflow(unittest.TestCase):
         command = _job_log_tail_command("/scratch/job/eos", "98765")
 
         self.assertIn("/scratch/job/eos/tasks/*/vasp.log", command)
-        self.assertIn("/fs04/scratch2/lh36/jarn0012/vasp/slurm/*-98765.out", command)
-        self.assertIn("/fs04/scratch2/lh36/jarn0012/vasp/slurm/*-98765.err", command)
+        self.assertIn("/scratch/job/eos/slurm-*-98765.out", command)
+        self.assertIn("/scratch/job/eos/slurm-*-98765.err", command)
         self.assertIn("tail -n 12", command)
 
     def test_cobalt_relaxation_and_eos_inputs_use_logical_settings(self):

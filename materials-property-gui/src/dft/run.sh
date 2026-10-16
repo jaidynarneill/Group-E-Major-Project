@@ -2,8 +2,8 @@
 #SBATCH --job-name=Materials_DFT
 #SBATCH --ntasks=16
 #SBATCH --time=02:00:00
-#SBATCH --output=/fs04/scratch2/lh36/jarn0012/vasp/slurm/%x-%j.out
-#SBATCH --error=/fs04/scratch2/lh36/jarn0012/vasp/slurm/%x-%j.err
+#SBATCH --output=slurm-%x-%j.out
+#SBATCH --error=slurm-%x-%j.err
 
 set -euo pipefail
 

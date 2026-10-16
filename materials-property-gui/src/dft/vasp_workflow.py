@@ -24,7 +24,6 @@ try:
     from dft.remote_vasp import (
         MODULEFILE_DIRECTORY,
         REMOTE_SCRATCH_DIRECTORY,
-        REMOTE_SLURM_DIRECTORY,
         SSH_HOST,
         VASP_MODULE,
         clean_shell_startup_warnings,
@@ -47,7 +46,6 @@ except ModuleNotFoundError as error:
     from src.dft.remote_vasp import (
         MODULEFILE_DIRECTORY,
         REMOTE_SCRATCH_DIRECTORY,
-        REMOTE_SLURM_DIRECTORY,
         SSH_HOST,
         VASP_MODULE,
         clean_shell_startup_warnings,
@@ -84,6 +82,18 @@ def _run_script_path():
         bundle_directory = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
         return bundle_directory / "src" / "dft" / "run.sh"
     return Path(__file__).with_name("run.sh")
+
+
+def _remote_material_directory(material_name):
+    folder_name = re.sub(r"[^A-Za-z0-9]+", "-", material_name).strip("-")
+    if not folder_name:
+        raise ValueError("Material name cannot produce a remote folder name.")
+    return f"{REMOTE_SCRATCH_DIRECTORY.rstrip('/')}/{folder_name}-Dft"
+
+
+def _remote_run_directory(material_name, run_id=None):
+    run_id = run_id or uuid.uuid4().hex
+    return f"{_remote_material_directory(material_name)}/run-{run_id}"
 
 
 def _kpoint_mesh(atoms):
@@ -367,11 +377,10 @@ def _string_file(value):
 
 def _job_log_tail_command(remote_phase, job_id):
     phase_path = shlex.quote(remote_phase)
-    slurm_path = shlex.quote(REMOTE_SLURM_DIRECTORY)
     quoted_job_id = shlex.quote(job_id)
     return (
         f"for file in {phase_path}/tasks/*/vasp.log "
-        f"{slurm_path}/*-{quoted_job_id}.out {slurm_path}/*-{quoted_job_id}.err; do "
+        f"{phase_path}/slurm-*-{quoted_job_id}.out {phase_path}/slurm-*-{quoted_job_id}.err; do "
         "if [ -f \"$file\" ]; then printf '\\n--- %s ---\\n' \"$file\"; "
         "tail -n 12 \"$file\"; fi; done | tail -n 80"
     )
@@ -535,7 +544,8 @@ def calculate_remote_dft_report(
         raise ValueError("Cluster username and password are required for DFT.")
 
     client = None
-    remote_root = f"{REMOTE_SCRATCH_DIRECTORY.rstrip('/')}/materials-property-{uuid.uuid4().hex}"
+    remote_material_root = _remote_material_directory(material_name)
+    remote_root = _remote_run_directory(material_name)
     try:
         progress(f"Connecting to {SSH_HOST}...")
         client = _connect(username.strip(), password)
@@ -545,8 +555,9 @@ def calculate_remote_dft_report(
             progress(f"VASP {VASP_MODULE} and potgen found on the cluster.")
             _remote_command(
                 client,
-                f"mkdir -m 700 -p {shlex.quote(REMOTE_SLURM_DIRECTORY)}",
+                f"rm -rf -- {shlex.quote(REMOTE_SCRATCH_DIRECTORY.rstrip('/') + '/slurm')}",
             )
+            _remote_command(client, f"mkdir -m 700 -p {shlex.quote(remote_material_root)}")
             _remote_command(client, f"mkdir -m 700 {shlex.quote(remote_root)}")
             with tempfile.TemporaryDirectory(prefix="materials-property-") as temporary_directory:
                 local_root = Path(temporary_directory)
@@ -632,7 +643,4 @@ def calculate_remote_dft_report(
             sftp.close()
     finally:
         if client is not None:
-            try:
-                _remote_command(client, f"rm -rf -- {shlex.quote(remote_root)}", timeout=60, check=False)
-            finally:
-                client.close()
+            client.close()
