@@ -43,6 +43,7 @@ class TestRemoteVaspInspection(unittest.TestCase):
         self.assertIn("module load hpcx-ompi", command)
         self.assertIn("hdf5/1.12.3", command)
         self.assertIn("wannier90/3.1.0-mpi", command)
+        self.assertIn("command -v potgen", command)
         self.assertLess(
             command.index("module load hpcx/.2.14-redhat9.2-patch1"),
             command.index("module load hpcx-ompi"),

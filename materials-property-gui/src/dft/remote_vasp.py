@@ -5,7 +5,7 @@ import re
 SSH_HOST = "m3.massive.org.au"
 MODULEFILE_DIRECTORY = "/projects/lh36/sdwi0002/opt/modulefiles"
 REMOTE_SCRATCH_DIRECTORY = "/fs04/scratch2/lh36/jarn0012/vasp"
-VASP_MODULE = "vasp/6.4.2"
+VASP_MODULE = "vasp/6.6"
 VASP_PREREQUISITE_MODULES = (
     "hpcx/.2.14-redhat9.2-patch1",
     "hpcx-ompi",
@@ -40,6 +40,7 @@ def _module_setup_lines():
 def _cluster_inspection_command():
     script = "\n".join((
         *_module_setup_lines(),
+        "command -v potgen || true",
         "printf 'VASP_EXECUTABLE='; command -v vasp_std || true; printf '\\n'",
         "printf 'VASP_PP_PATH=%s\\n' \"${VASP_PP_PATH:-}\"",
         f"printf 'STAGING_DIRECTORY={shlex.quote(REMOTE_SCRATCH_DIRECTORY)}\\n'",

@@ -2,7 +2,12 @@ import unittest
 from types import ModuleType
 from unittest.mock import Mock, patch
 
-from src.ui.plot_panel import CalculationWorker, configurations_need_cluster_login
+from src.ui.plot_panel import (
+    CalculationWorker,
+    PlotPanel,
+    configuration_compatibility_errors,
+    configurations_need_cluster_login,
+)
 from src.ui.cluster_connection_dialog import (
     CREDENTIAL_ACCOUNT,
     CREDENTIAL_SERVICE,
@@ -13,6 +18,33 @@ from src.ui.cluster_connection_dialog import (
 
 
 class TestClusterRunGating(unittest.TestCase):
+    def test_periodic_table_materials_keep_all_methods_selectable(self):
+        self.assertGreaterEqual(len(PlotPanel.MATERIALS), 118)
+        self.assertIn("Cobalt", PlotPanel.MATERIALS)
+        self.assertIn("MEAM", PlotPanel.METHODS)
+        self.assertIn("DFT", PlotPanel.METHODS)
+        self.assertIn("MACE-MP Small", PlotPanel.METHODS)
+
+    def test_meam_incompatibility_is_reported_without_hiding_the_method(self):
+        errors = configuration_compatibility_errors([(1, "Cobalt", "FCC", "MEAM")])
+
+        self.assertEqual(len(errors), 1)
+        self.assertIn("MEAM is incompatible with Cobalt", errors[0])
+
+    def test_dft_cobalt_is_compatible_but_unknown_starting_cells_are_rejected(self):
+        self.assertEqual(
+            configuration_compatibility_errors([(1, "Co", "FCC", "DFT")]),
+            [],
+        )
+        errors = configuration_compatibility_errors([(1, "Og", "FCC", "DFT")])
+        self.assertTrue(any("no reference cell" in error for error in errors))
+
+    def test_unsupported_lattice_is_reported_when_run_is_requested(self):
+        errors = configuration_compatibility_errors([(1, "Cobalt", "HCP", "DFT")])
+
+        self.assertEqual(len(errors), 1)
+        self.assertIn("Cubic elasticity fits", errors[0])
+
     def test_credentials_are_remembered_through_the_os_keyring(self):
         entries = {}
         keyring = ModuleType("keyring")

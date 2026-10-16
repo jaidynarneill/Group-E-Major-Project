@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QCheckBox,
     QGroupBox,
+    QMessageBox,
     QScrollArea,
     QPlainTextEdit,
     QApplication,
@@ -23,8 +24,13 @@ import numpy as np
 try:
     from analysis.elastic_properties import (
         EV_A3_TO_GPA,
+        ELEMENT_NAMES,
         MEAM_CATALOG,
         MACE_MODEL_OPTIONS,
+        REFERENCE_LATTICE_PARAMETERS,
+        _normalize_material,
+        _normalize_method,
+        _normalize_structure,
         birch_murnaghan,
         create_calculator,
         compute_elastic_properties,
@@ -38,8 +44,13 @@ except ModuleNotFoundError as error:
         raise
     from src.analysis.elastic_properties import (
         EV_A3_TO_GPA,
+        ELEMENT_NAMES,
         MEAM_CATALOG,
         MACE_MODEL_OPTIONS,
+        REFERENCE_LATTICE_PARAMETERS,
+        _normalize_material,
+        _normalize_method,
+        _normalize_structure,
         birch_murnaghan,
         create_calculator,
         compute_elastic_properties,
@@ -48,6 +59,46 @@ except ModuleNotFoundError as error:
     from src.analysis.surface_energy import compute_surface_energies
     from src.analysis.result_cache import CalculationResultCache
     from src.ui.cluster_connection_dialog import ClusterConnectionDialog
+
+from ase.data import chemical_symbols as ASE_CHEMICAL_SYMBOLS
+from ase.data import reference_states as ASE_REFERENCE_STATES
+
+
+CUBIC_LATTICE_OPTIONS = ["FCC", "BCC", "Diamond cubic", "Simple cubic"]
+ASE_SYMMETRY_LATTICES = {
+    "fcc": "FCC",
+    "bcc": "BCC",
+    "diamond": "Diamond cubic",
+    "sc": "Simple cubic",
+}
+
+
+def configuration_compatibility_errors(configurations):
+    errors = []
+    for run_number, material, lattice, method in configurations:
+        try:
+            material_name, symbol = _normalize_material(material)
+            crystal_structure = _normalize_structure(lattice)
+            method_name = _normalize_method(method)
+        except ValueError as error:
+            errors.append(f"Run {run_number} ({material} / {lattice} / {method}): {error}")
+            continue
+
+        if method_name == "MEAM":
+            record = MEAM_CATALOG.get(symbol)
+            if record is None:
+                errors.append(f"Run {run_number}: MEAM is incompatible with {material_name}.")
+            elif record["lattice"] != crystal_structure:
+                errors.append(
+                    f"Run {run_number}: MEAM for {material_name} is parameterized for "
+                    f"{record['lattice_name']}, not {lattice}."
+                )
+        if symbol not in REFERENCE_LATTICE_PARAMETERS:
+            errors.append(
+                f"Run {run_number}: no reference cell is available for {material_name}; "
+                "DFT and MACE cannot start this calculation."
+            )
+    return errors
 
 
 def configurations_need_cluster_login(configurations):
@@ -148,13 +199,12 @@ class CalculationWorker(QObject):
 class PlotPanel(QWidget):
     themeChanged = pyqtSignal(bool)
 
-    MATERIALS = [record["name"] for record in MEAM_CATALOG.values()]
-    MATERIAL_SYMBOLS = {record["name"]: symbol for symbol, record in MEAM_CATALOG.items()}
+    MATERIALS = list(dict.fromkeys(
+        [record["name"] for record in MEAM_CATALOG.values()]
+        + [ELEMENT_NAMES.get(symbol, symbol) for symbol in ASE_CHEMICAL_SYMBOLS[1:]]
+    ))
     METHODS = [*MACE_MODEL_OPTIONS, "MEAM", "DFT"]
-    LATTICES = {
-        record["name"]: [record["lattice_name"]]
-        for record in MEAM_CATALOG.values()
-    }
+    LATTICES = {material: CUBIC_LATTICE_OPTIONS for material in MATERIALS}
     DEFAULT_MATERIALS = ["Aluminum", "Copper", "Silicon"]
 
     def __init__(self):
@@ -213,6 +263,7 @@ class PlotPanel(QWidget):
 
             lattice = QComboBox()
             lattice.addItems(self.LATTICES[material.currentText()])
+            lattice.setCurrentText(self.default_lattice_for_material(material.currentText()))
 
             method = QComboBox()
             method.addItems(self.METHODS)
@@ -380,6 +431,17 @@ class PlotPanel(QWidget):
         if previous_value in options:
             dropdown.setCurrentText(previous_value)
 
+    @staticmethod
+    def default_lattice_for_material(material):
+        _, symbol = _normalize_material(material)
+        record = MEAM_CATALOG.get(symbol)
+        if record is not None:
+            return record["lattice_name"]
+        reference_state = ASE_REFERENCE_STATES[ASE_CHEMICAL_SYMBOLS.index(symbol)]
+        if symbol == "Co" or reference_state is None:
+            return "FCC"
+        return ASE_SYMMETRY_LATTICES.get(reference_state.get("symmetry"), "FCC")
+
     def show_empty_plots(self, message="Run a configuration to calculate plots."):
         colors = self.theme_colors
         self.figure.clear()
@@ -427,6 +489,15 @@ class PlotPanel(QWidget):
 
         if not configurations:
             self.status_label.setText("Enable at least one configuration before running.")
+            return
+
+        compatibility_errors = configuration_compatibility_errors(configurations)
+        if compatibility_errors:
+            QMessageBox.warning(
+                self,
+                "Method incompatible",
+                "Some selected calculations cannot run:\n\n" + "\n".join(compatibility_errors),
+            )
             return
 
         if configurations_need_cluster_login(configurations):

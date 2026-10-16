@@ -7,13 +7,23 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+from ase.data import chemical_symbols as ASE_CHEMICAL_SYMBOLS
+from ase.data import reference_states as ASE_REFERENCE_STATES
 from scipy.optimize import curve_fit
 
 
 EV_A3_TO_GPA = 160.21766208
 STRAINS = np.array([-0.005, -0.0025, -0.001, 0.001, 0.0025, 0.005])
 DATA_DIRECTORY = Path(__file__).resolve().parents[1] / "data"
-REFERENCE_LATTICE_PARAMETERS = {"Al": 4.05, "Cu": 3.615, "Si": 5.43}
+REFERENCE_LATTICE_PARAMETERS = {
+    symbol: float(reference_state["a"])
+    for atomic_number, symbol in enumerate(ASE_CHEMICAL_SYMBOLS)
+    if atomic_number > 0
+    and (reference_state := ASE_REFERENCE_STATES[atomic_number]) is not None
+    and reference_state.get("a") is not None
+    and float(reference_state["a"]) > 0.0
+}
+REFERENCE_LATTICE_PARAMETERS["Co"] = 3.5133144702592642
 CRYSTAL_STRUCTURES = {
     "fcc": "fcc",
     "bcc": "bcc",
@@ -38,7 +48,7 @@ ELEMENT_SYMBOLS = {
 ELEMENT_NAMES = {
     "Li": "Lithium", "C": "Carbon", "Na": "Sodium", "Mg": "Magnesium",
     "Al": "Aluminum", "Si": "Silicon", "K": "Potassium", "V": "Vanadium",
-    "Cr": "Chromium", "Fe": "Iron", "Ni": "Nickel", "Cu": "Copper",
+    "Cr": "Chromium", "Fe": "Iron", "Ni": "Nickel", "Cu": "Copper", "Co": "Cobalt",
     "Nb": "Niobium", "Mo": "Molybdenum", "Rh": "Rhodium", "Pd": "Palladium",
     "Ag": "Silver", "Sn": "Tin", "Ta": "Tantalum", "W": "Tungsten",
     "Ir": "Iridium", "Pt": "Platinum", "Au": "Gold", "Pb": "Lead", "Bi": "Bismuth",
@@ -175,14 +185,20 @@ def _normalize_material(material):
         "copper": ("Copper", "Cu"),
         "si": ("Silicon", "Si"),
         "silicon": ("Silicon", "Si"),
+        "co": ("Cobalt", "Co"),
+        "cobalt": ("Cobalt", "Co"),
     }
     for symbol, record in MEAM_CATALOG.items():
         materials[symbol.lower()] = (record["name"], symbol)
         materials[record["name"].lower()] = (record["name"], symbol)
+    for symbol in ASE_CHEMICAL_SYMBOLS[1:]:
+        name = ELEMENT_NAMES.get(symbol, symbol)
+        materials[symbol.lower()] = (name, symbol)
+        materials[name.lower()] = (name, symbol)
     try:
         return materials[key]
     except KeyError as error:
-        raise ValueError(f"Unsupported material {material!r}; choose aluminum, copper, or silicon.") from error
+        raise ValueError(f"Unsupported material {material!r}; choose a material supported by the application.") from error
 
 
 def _normalize_structure(lattice_structure):

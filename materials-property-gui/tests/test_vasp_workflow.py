@@ -10,12 +10,56 @@ from src.analysis.elastic_properties import EV_A3_TO_GPA, birch_murnaghan
 from src.dft.vasp_workflow import (
     _assemble_report,
     _stage_phase,
+    _validate_remote_environment,
+    build_bulk_relaxation_task,
     build_eos_tasks,
     build_followup_tasks,
 )
+from src.dft.remote_vasp import VASP_MODULE
 
 
 class TestVaspWorkflow(unittest.TestCase):
+    def test_cobalt_relaxation_and_eos_inputs_use_logical_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            relaxation_task = build_bulk_relaxation_task("Co", "FCC", root / "relax")
+            _, _, _, eos_tasks = build_eos_tasks(
+                "Co",
+                "FCC",
+                root / "eos",
+                reference_lattice=3.5133144702592642,
+            )
+
+            relaxation_directory = root / "relax" / relaxation_task["name"]
+            relaxation_poscar = (relaxation_directory / "POSCAR").read_text(encoding="ascii")
+            relaxation_kpoints = (relaxation_directory / "KPOINTS").read_text(encoding="ascii")
+            relaxation_incar = (relaxation_directory / "INCAR.template").read_text(encoding="ascii")
+            eos_incar = (root / "eos" / eos_tasks[0]["name"] / "INCAR.template").read_text(encoding="ascii")
+
+        self.assertEqual([line.strip() for line in relaxation_poscar.splitlines()[5:7]], ["Co", "4"])
+        self.assertIn("Gamma\n7 7 7\n", relaxation_kpoints)
+        self.assertIn("ISIF = 3", relaxation_incar)
+        self.assertIn("NSW = 99", relaxation_incar)
+        self.assertIn("ISPIN = 2", relaxation_incar)
+        self.assertIn("MAGMOM = 4*0.6", relaxation_incar)
+        self.assertIn("ISIF = 2", eos_incar)
+        self.assertIn("IBRION = -1", eos_incar)
+        self.assertIn("NSW = 0", eos_incar)
+        self.assertNotIn("EDIFFG", eos_incar)
+        self.assertAlmostEqual(eos_tasks[0]["lattice_parameter"], 3.5133144702592642 * 0.97)
+
+    def test_remote_preflight_requires_vasp_and_potgen(self):
+        with patch(
+            "src.dft.vasp_workflow._remote_command",
+            return_value=("", "", 0),
+        ) as remote_command:
+            _validate_remote_environment(Mock(), "Al")
+
+        command = remote_command.call_args.args[1]
+        self.assertIn(f"module load {VASP_MODULE}", command)
+        self.assertIn("command -v potgen", command)
+        self.assertNotIn("POTCAR_SOURCE", command)
+
     def test_phase_stages_task_inputs_submits_and_downloads_outputs(self):
         with tempfile.TemporaryDirectory() as directory:
             local_phase = Path(directory)

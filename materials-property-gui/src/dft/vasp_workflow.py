@@ -55,10 +55,11 @@ except ModuleNotFoundError as error:
     )
 
 
-VASP_WORKFLOW_VERSION = 1
-VASP_KPOINTS_BULK = (8, 8, 8)
-VASP_KPOINTS_SURFACE = (8, 8, 1)
+VASP_WORKFLOW_VERSION = 2
+VASP_KPOINTS_DENSITY = 1464
 VASP_ENCUT_FACTOR = 1.3
+VASP_BULK_RELAX_MAX_STEPS = 99
+VASP_INITIAL_MAGMOM = {"Co": 0.6}
 VASP_SURFACE_LAYERS = 8
 VASP_SURFACE_VACUUM = 10.0
 VASP_SURFACE_FMAX = 0.05
@@ -67,9 +68,10 @@ VASP_CACHE_BACKEND = (
     "VASP",
     VASP_MODULE,
     VASP_WORKFLOW_VERSION,
-    VASP_KPOINTS_BULK,
-    VASP_KPOINTS_SURFACE,
+    VASP_KPOINTS_DENSITY,
     VASP_ENCUT_FACTOR,
+    VASP_BULK_RELAX_MAX_STEPS,
+    tuple(sorted(VASP_INITIAL_MAGMOM.items())),
     VASP_SURFACE_LAYERS,
     VASP_SURFACE_VACUUM,
     VASP_SURFACE_FMAX,
@@ -84,43 +86,78 @@ def _run_script_path():
     return Path(__file__).with_name("run.sh")
 
 
-def _write_vasp_task(directory, atoms, *, relax=False, kpoints=None):
+def _kpoint_mesh(atoms):
+    reciprocal_lengths = np.linalg.norm(atoms.cell.reciprocal(), axis=1)
+    geometric_mean = float(np.cbrt(np.prod(reciprocal_lengths)))
+    density_per_atom = VASP_KPOINTS_DENSITY / len(atoms)
+    scaled_mesh = np.cbrt(density_per_atom) * reciprocal_lengths / geometric_mean
+    return tuple(np.maximum(1, np.rint(scaled_mesh).astype(int)))
+
+
+def _write_vasp_task(directory, atoms, *, relax=False, relax_cell=False):
     from ase.io import write
 
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     write(directory / "POSCAR", atoms, format="vasp", direct=True, vasp5=True, sort=True)
-    mesh = kpoints or VASP_KPOINTS_BULK
+    mesh = _kpoint_mesh(atoms)
     (directory / "KPOINTS").write_text(
-        "Automatic mesh\n0\nGamma\n" + " ".join(map(str, mesh)) + "\n0 0 0\n",
+        "Automatic mesh (grid density = 1464 / number of atoms)\n0\nGamma\n"
+        + " ".join(map(str, mesh))
+        + "\n",
         encoding="ascii",
     )
     incar = [
         "PREC = Accurate",
         "ENCUT = @ENCUT@",
-        "EDIFF = 1E-8",
+        "EDIFF = 2E-4" if relax else "EDIFF = 1E-8",
         "ISMEAR = 0",
         "SIGMA = 0.05",
         "LREAL = .FALSE.",
         "LASPH = .TRUE.",
         "ISYM = 0",
-        "ISIF = 2",
+        f"ISIF = {3 if relax_cell else 2}",
         f"IBRION = {2 if relax else -1}",
-        f"NSW = {VASP_SURFACE_MAX_STEPS if relax else 0}",
+        f"NSW = {VASP_BULK_RELAX_MAX_STEPS if relax_cell else VASP_SURFACE_MAX_STEPS if relax else 0}",
         "LWAVE = .FALSE.",
         "LCHARG = .FALSE.",
     ]
+    symbol = atoms.get_chemical_symbols()[0]
+    if symbol in VASP_INITIAL_MAGMOM:
+        incar.extend((
+            "ISPIN = 2",
+            f"MAGMOM = {len(atoms)}*{VASP_INITIAL_MAGMOM[symbol]}",
+            "LMAXMIX = 4",
+            "LORBIT = 11",
+            "ALGO = Fast",
+        ))
     if relax:
         incar.append(f"EDIFFG = -{VASP_SURFACE_FMAX}")
     (directory / "INCAR.template").write_text("\n".join(incar) + "\n", encoding="ascii")
 
 
-def build_eos_tasks(material, lattice_structure, directory):
+def build_bulk_relaxation_task(material, lattice_structure, directory):
+    from ase.build import bulk
+
+    _, symbol = _normalize_material(material)
+    crystal_structure = _normalize_structure(lattice_structure)
+    atoms = bulk(
+        symbol,
+        crystal_structure,
+        a=REFERENCE_LATTICE_PARAMETERS[symbol],
+        cubic=True,
+    )
+    name = "bulk_relax"
+    _write_vasp_task(Path(directory) / name, atoms, relax=True, relax_cell=True)
+    return {"name": name, "kind": "bulk_relax", "atom_count": len(atoms)}
+
+
+def build_eos_tasks(material, lattice_structure, directory, *, reference_lattice=None):
     from ase.build import bulk
 
     material_name, symbol = _normalize_material(material)
     crystal_structure = _normalize_structure(lattice_structure)
-    reference = REFERENCE_LATTICE_PARAMETERS[symbol]
+    reference = reference_lattice or REFERENCE_LATTICE_PARAMETERS[symbol]
     lattice_parameters = np.linspace(reference * 0.97, reference * 1.03, 13)
     tasks = []
     for index, lattice_parameter in enumerate(lattice_parameters):
@@ -170,7 +207,7 @@ def build_followup_tasks(symbol, crystal_structure, equilibrium_lattice, directo
         )
         slab.pbc = (True, True, True)
         name = "surface_" + "".join(str(index) for index in indices)
-        _write_vasp_task(directory / name, slab, relax=True, kpoints=VASP_KPOINTS_SURFACE)
+        _write_vasp_task(directory / name, slab, relax=True)
         tasks.append({
             "name": name,
             "kind": "surface",
@@ -186,7 +223,10 @@ def _read_vasp_result(outcar_path):
     from ase.io import read
 
     atoms = read(str(outcar_path), index=-1, format="vasp-out")
-    result = {"energy": float(atoms.get_potential_energy())}
+    result = {
+        "energy": float(atoms.get_potential_energy()),
+        "volume_A3": float(atoms.get_volume()),
+    }
     try:
         result["stress"] = np.asarray(atoms.get_stress(voigt=True), dtype=float)
     except (RuntimeError, ValueError):
@@ -254,26 +294,23 @@ def _connect(username, password):
 
 
 def _validate_remote_environment(client, symbol):
-    quoted_symbol = shlex.quote(symbol)
     script = "\n".join((
         f"module use {shlex.quote(MODULEFILE_DIRECTORY)}",
         f"module load {' '.join(map(shlex.quote, VASP_PREREQUISITE_MODULES))}",
         f"module load {shlex.quote(VASP_MODULE)}",
         "vasp_executable=$(command -v vasp_std || true)",
+        "potgen_executable=$(command -v potgen || true)",
         "printf 'VASP_EXECUTABLE=%s\\n' \"$vasp_executable\"",
-        "printf 'VASP_PP_PATH=%s\\n' \"${VASP_PP_PATH:-}\"",
-        "potcar_source=''",
-        f"for candidate in \"${{VASP_PP_PATH:-}}\"/potpaw_PBE*/{quoted_symbol}/POTCAR \"${{VASP_PP_PATH:-}}\"/potpaw_PBE*/{quoted_symbol}*/POTCAR \"${{VASP_PP_PATH:-}}\"/{quoted_symbol}/POTCAR \"${{VASP_PP_PATH:-}}\"/{quoted_symbol}*/POTCAR; do if [ -f \"$candidate\" ]; then potcar_source=$candidate; break; fi; done",
-        "printf 'POTCAR_SOURCE=%s\\n' \"$potcar_source\"",
-        "test -n \"$vasp_executable\" && test -n \"$potcar_source\"",
+        "printf 'POTGEN_EXECUTABLE=%s\\n' \"$potgen_executable\"",
+        "test -n \"$vasp_executable\" && test -n \"$potgen_executable\"",
     ))
     command = module_shell_command(script)
     output, errors, status = _remote_command(client, command, timeout=60, check=False)
     errors = clean_shell_startup_warnings(errors)
     if status != 0:
         raise RuntimeError(
-            "Cluster preflight failed for this element. Expected vasp_std and a PBE POTCAR "
-            f"for {symbol} after loading {VASP_MODULE}.\n{output}\n{errors}".strip()
+            "Cluster preflight failed. Expected vasp_std and potgen after loading "
+            f"{VASP_MODULE} for {symbol}.\n{output}\n{errors}".strip()
         )
     return output
 
@@ -472,8 +509,6 @@ def calculate_remote_dft_report(
     job_timeout=4 * 60 * 60,
 ):
     """Run EOS, elasticity, and surface calculations using remote VASP jobs."""
-    from ase.build import bulk
-
     progress = progress or (lambda message: None)
     material_name, symbol = _normalize_material(material)
     crystal_structure = _normalize_structure(lattice_structure)
@@ -488,12 +523,42 @@ def calculate_remote_dft_report(
         sftp = client.open_sftp()
         try:
             preflight = _validate_remote_environment(client, symbol)
-            progress(f"VASP {VASP_MODULE} and {symbol} POTCAR found on the cluster.")
+            progress(f"VASP {VASP_MODULE} and potgen found on the cluster.")
             _remote_command(client, f"mkdir -m 700 {shlex.quote(remote_root)}")
             with tempfile.TemporaryDirectory(prefix="materials-property-") as temporary_directory:
                 local_root = Path(temporary_directory)
+                relaxation_directory = local_root / "bulk_relax"
+                relaxation_task = build_bulk_relaxation_task(
+                    material_name,
+                    lattice_structure,
+                    relaxation_directory,
+                )
+                relaxation_outputs = _stage_phase(
+                    sftp,
+                    client,
+                    remote_root,
+                    "bulk-relax",
+                    [relaxation_task],
+                    symbol,
+                    relaxation_directory,
+                    f"dft-{symbol.lower()}-relax",
+                    progress,
+                    poll_interval,
+                    job_timeout,
+                )
+                relaxed_volume = relaxation_outputs[relaxation_task["name"]]["volume_A3"]
+                if not np.isfinite(relaxed_volume) or relaxed_volume <= 0.0:
+                    raise RuntimeError("Bulk relaxation returned an invalid cell volume.")
+                relaxed_lattice = float(np.cbrt(relaxed_volume))
+                progress(f"Bulk relaxation complete; starting EOS around {relaxed_lattice:.6f} Å.")
+
                 eos_directory = local_root / "eos"
-                _, _, _, eos_tasks = build_eos_tasks(material_name, lattice_structure, eos_directory)
+                _, _, _, eos_tasks = build_eos_tasks(
+                    material_name,
+                    lattice_structure,
+                    eos_directory,
+                    reference_lattice=relaxed_lattice,
+                )
                 eos_outputs = _stage_phase(
                     sftp,
                     client,
