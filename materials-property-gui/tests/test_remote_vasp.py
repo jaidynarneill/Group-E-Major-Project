@@ -27,6 +27,7 @@ class TestRemoteVaspInspection(unittest.TestCase):
         self.assertNotIn("module load hdf5", launcher)
         self.assertNotIn("module load wannier90", launcher)
         self.assertNotIn("/vasp/slurm/", launcher)
+        self.assertIn("ulimit -s unlimited", launcher)
 
     def test_inspection_authenticates_and_reports_remote_capabilities(self):
         client = Mock()

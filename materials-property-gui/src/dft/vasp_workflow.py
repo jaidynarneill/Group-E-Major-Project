@@ -379,7 +379,7 @@ def _job_log_tail_command(remote_phase, job_id):
     phase_path = shlex.quote(remote_phase)
     quoted_job_id = shlex.quote(job_id)
     return (
-        f"for file in {phase_path}/tasks/*/vasp.log "
+        f"for file in {phase_path}/tasks/*/vasp.log {phase_path}/tasks/*/OUTCAR "
         f"{phase_path}/slurm-*-{quoted_job_id}.out {phase_path}/slurm-*-{quoted_job_id}.err; do "
         "if [ -f \"$file\" ]; then printf '\\n--- %s ---\\n' \"$file\"; "
         "tail -n 12 \"$file\"; fi; done | tail -n 80"

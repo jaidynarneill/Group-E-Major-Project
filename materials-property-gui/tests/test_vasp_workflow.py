@@ -58,6 +58,7 @@ class TestVaspWorkflow(unittest.TestCase):
         command = _job_log_tail_command("/scratch/job/eos", "98765")
 
         self.assertIn("/scratch/job/eos/tasks/*/vasp.log", command)
+        self.assertIn("/scratch/job/eos/tasks/*/OUTCAR", command)
         self.assertIn("/scratch/job/eos/slurm-*-98765.out", command)
         self.assertIn("/scratch/job/eos/slurm-*-98765.err", command)
         self.assertIn("tail -n 12", command)
