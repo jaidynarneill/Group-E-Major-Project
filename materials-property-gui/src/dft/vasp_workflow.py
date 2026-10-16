@@ -386,6 +386,14 @@ def _job_log_tail_command(remote_phase, job_id):
     )
 
 
+def _job_accounting_command(job_id):
+    return (
+        "sacct --noheader --parsable2 "
+        f"--jobs={shlex.quote(job_id)} "
+        "--format=State,ExitCode,MaxRSS,ReqMem,Elapsed -X | head -n 1"
+    )
+
+
 def _read_job_log_tail(client, remote_phase, job_id):
     output, _, _ = _remote_command(
         client,
@@ -393,6 +401,15 @@ def _read_job_log_tail(client, remote_phase, job_id):
         check=False,
     )
     return output
+
+
+def _read_job_accounting(client, job_id):
+    output, _, _ = _remote_command(
+        client,
+        _job_accounting_command(job_id),
+        check=False,
+    )
+    return output or "unavailable"
 
 
 def _wait_for_job(client, remote_phase, job_id, progress, poll_interval, job_timeout):
@@ -412,14 +429,19 @@ def _wait_for_job(client, remote_phase, job_id, progress, poll_interval, job_tim
                 check=False,
             )
             state = account_output.split("|", 1)[0].strip().split("+")[0]
-        logs = _read_job_log_tail(client, remote_phase, job_id)
         if state == "COMPLETED":
-            progress(f"Slurm job {job_id}: COMPLETED\n{logs}".rstrip())
+            progress(f"Slurm job {job_id}: COMPLETED")
             return
         if state in failed_states:
-            raise RuntimeError(f"Slurm job {job_id} ended in state {state}.\n{logs}".strip())
+            logs = _read_job_log_tail(client, remote_phase, job_id)
+            accounting = _read_job_accounting(client, job_id)
+            message = (
+                f"Slurm job {job_id} ended in state {state}.\n"
+                f"Slurm accounting (State|ExitCode|MaxRSS|ReqMem|Elapsed): {accounting}\n{logs}"
+            ).strip()
+            raise RuntimeError(message)
         message = f"Slurm job {job_id}: {state or 'waiting for accounting status'}..."
-        progress(f"{message}\n{logs}".rstrip())
+        progress(message)
         time.sleep(poll_interval)
 
     _remote_command(client, f"scancel {shlex.quote(job_id)}", check=False)

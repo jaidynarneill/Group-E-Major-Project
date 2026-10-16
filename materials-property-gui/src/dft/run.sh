@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=Materials_DFT
 #SBATCH --ntasks=16
+#SBATCH --constraint=intel
 #SBATCH --time=02:00:00
 #SBATCH --output=slurm-%x-%j.out
 #SBATCH --error=slurm-%x-%j.err
@@ -32,6 +33,7 @@ for task_directory in "$SLURM_SUBMIT_DIR"/tasks/*; do
 	[ -d "$task_directory" ] || continue
 	cp "$SLURM_SUBMIT_DIR/POTCAR" "$task_directory/POTCAR"
 	sed "s/@ENCUT@/$encut/g" "$task_directory/INCAR.template" > "$task_directory/INCAR"
+	printf 'Starting VASP task %s\n' "${task_directory##*/}"
 	(
 		cd "$task_directory"
 		mpirun -n "$SLURM_NTASKS" vasp_std > vasp.log 2>&1

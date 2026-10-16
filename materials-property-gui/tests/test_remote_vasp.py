@@ -18,6 +18,7 @@ class TestRemoteVaspInspection(unittest.TestCase):
         launcher_bytes = launcher.read_bytes()
 
         self.assertTrue(launcher_bytes.startswith(b"#!/bin/bash\n"))
+        self.assertIn(b"#SBATCH --constraint=intel", launcher_bytes)
         self.assertIn(b"#SBATCH --output=slurm-%x-%j.out", launcher_bytes)
         self.assertIn(b"#SBATCH --error=slurm-%x-%j.err", launcher_bytes)
         launcher = launcher_bytes.decode("ascii")
@@ -27,7 +28,7 @@ class TestRemoteVaspInspection(unittest.TestCase):
         self.assertNotIn("module load hdf5", launcher)
         self.assertNotIn("module load wannier90", launcher)
         self.assertNotIn("/vasp/slurm/", launcher)
-        self.assertIn("ulimit -s unlimited", launcher)
+        self.assertIn("Starting VASP task %s", launcher)
 
     def test_inspection_authenticates_and_reports_remote_capabilities(self):
         client = Mock()

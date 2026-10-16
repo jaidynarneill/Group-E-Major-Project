@@ -9,6 +9,7 @@ from ase.build import bulk
 from src.analysis.elastic_properties import EV_A3_TO_GPA, birch_murnaghan
 from src.dft.vasp_workflow import (
     _assemble_report,
+    _job_accounting_command,
     _job_log_tail_command,
     _remote_material_directory,
     _remote_run_directory,
@@ -23,6 +24,24 @@ from src.dft.remote_vasp import VASP_MODULE
 
 
 class TestVaspWorkflow(unittest.TestCase):
+    def test_failed_job_diagnostics_include_slurm_resource_accounting(self):
+        command = _job_accounting_command("61084245")
+
+        self.assertIn("--format=State,ExitCode,MaxRSS,ReqMem,Elapsed", command)
+        self.assertIn("--jobs=61084245", command)
+
+        client = Mock()
+        with patch(
+            "src.dft.vasp_workflow._remote_command",
+            side_effect=[
+                ("FAILED", "", 0),
+                ("surface_100 vasp.log and OUTCAR tail", "", 0),
+                ("FAILED|139:0|3G|4G|00:01:00", "", 0),
+            ],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "FAILED\\|139:0\\|3G"):
+                _wait_for_job(client, "/scratch/job/followup", "61084245", Mock(), 0, 30)
+
     def test_material_named_run_directories_allow_reruns(self):
         material_directory = _remote_material_directory("Aluminum")
         first_run = _remote_run_directory("Aluminum", "run-one")
@@ -33,7 +52,7 @@ class TestVaspWorkflow(unittest.TestCase):
         self.assertTrue(second_run.startswith(material_directory + "/run-"))
         self.assertNotEqual(first_run, second_run)
 
-    def test_job_poller_emits_current_log_tail_to_progress_callback(self):
+    def test_job_poller_reports_state_without_streaming_logs(self):
         client = Mock()
         progress = Mock()
         with (
@@ -41,18 +60,17 @@ class TestVaspWorkflow(unittest.TestCase):
                 "src.dft.vasp_workflow._remote_command",
                 side_effect=[
                     ("RUNNING", "", 0),
-                    ("--- vasp.log ---\\nDAV: 12 energy=-42.0", "", 0),
                     ("COMPLETED", "", 0),
-                    ("--- vasp.log ---\\nreached required accuracy", "", 0),
                 ],
             ),
             patch("src.dft.vasp_workflow.time.sleep"),
         ):
             _wait_for_job(client, "/scratch/job/eos", "98765", progress, 0, 30)
 
-        self.assertIn("RUNNING", progress.call_args_list[0].args[0])
-        self.assertIn("DAV: 12 energy=-42.0", progress.call_args_list[0].args[0])
-        self.assertIn("reached required accuracy", progress.call_args_list[-1].args[0])
+        self.assertEqual(
+            [call.args[0] for call in progress.call_args_list],
+            ["Slurm job 98765: RUNNING...", "Slurm job 98765: COMPLETED"],
+        )
 
     def test_log_tail_reads_task_vasp_and_persistent_slurm_outputs(self):
         command = _job_log_tail_command("/scratch/job/eos", "98765")
