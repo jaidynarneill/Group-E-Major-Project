@@ -26,7 +26,6 @@ try:
         REMOTE_SCRATCH_DIRECTORY,
         REMOTE_SLURM_DIRECTORY,
         SSH_HOST,
-        VASP_PREREQUISITE_MODULES,
         VASP_MODULE,
         clean_shell_startup_warnings,
         module_shell_command,
@@ -50,7 +49,6 @@ except ModuleNotFoundError as error:
         REMOTE_SCRATCH_DIRECTORY,
         REMOTE_SLURM_DIRECTORY,
         SSH_HOST,
-        VASP_PREREQUISITE_MODULES,
         VASP_MODULE,
         clean_shell_startup_warnings,
         module_shell_command,
@@ -298,7 +296,6 @@ def _connect(username, password):
 def _validate_remote_environment(client, symbol):
     script = "\n".join((
         f"module use {shlex.quote(MODULEFILE_DIRECTORY)}",
-        f"module load {' '.join(map(shlex.quote, VASP_PREREQUISITE_MODULES))}",
         f"module load {shlex.quote(VASP_MODULE)}",
         "vasp_executable=$(command -v vasp_std || true)",
         "potgen_executable=$(command -v potgen || true)",
@@ -368,6 +365,27 @@ def _string_file(value):
     return io.BytesIO(value.encode("utf-8"))
 
 
+def _job_log_tail_command(remote_phase, job_id):
+    phase_path = shlex.quote(remote_phase)
+    slurm_path = shlex.quote(REMOTE_SLURM_DIRECTORY)
+    quoted_job_id = shlex.quote(job_id)
+    return (
+        f"for file in {phase_path}/tasks/*/vasp.log "
+        f"{slurm_path}/*-{quoted_job_id}.out {slurm_path}/*-{quoted_job_id}.err; do "
+        "if [ -f \"$file\" ]; then printf '\\n--- %s ---\\n' \"$file\"; "
+        "tail -n 12 \"$file\"; fi; done | tail -n 80"
+    )
+
+
+def _read_job_log_tail(client, remote_phase, job_id):
+    output, _, _ = _remote_command(
+        client,
+        _job_log_tail_command(remote_phase, job_id),
+        check=False,
+    )
+    return output
+
+
 def _wait_for_job(client, remote_phase, job_id, progress, poll_interval, job_timeout):
     failed_states = {"FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "PREEMPTED", "BOOT_FAIL"}
     deadline = time.monotonic() + job_timeout
@@ -385,22 +403,21 @@ def _wait_for_job(client, remote_phase, job_id, progress, poll_interval, job_tim
                 check=False,
             )
             state = account_output.split("|", 1)[0].strip().split("+")[0]
+        logs = _read_job_log_tail(client, remote_phase, job_id)
         if state == "COMPLETED":
+            progress(f"Slurm job {job_id}: COMPLETED\n{logs}".rstrip())
             return
         if state in failed_states:
-            logs, _, _ = _remote_command(
-                client,
-                f"for file in {shlex.quote(remote_phase)}/slurm-{shlex.quote(job_id)}.* "
-                f"{shlex.quote(remote_phase)}/tasks/*/vasp.log; do "
-                "[ -f \"$file\" ] && { echo \"--- $file ---\"; tail -n 60 \"$file\"; }; done | tail -n 240",
-                check=False,
-            )
             raise RuntimeError(f"Slurm job {job_id} ended in state {state}.\n{logs}".strip())
-        progress(f"Slurm job {job_id}: {state or 'waiting for accounting status'}...")
+        message = f"Slurm job {job_id}: {state or 'waiting for accounting status'}..."
+        progress(f"{message}\n{logs}".rstrip())
         time.sleep(poll_interval)
 
     _remote_command(client, f"scancel {shlex.quote(job_id)}", check=False)
-    raise TimeoutError(f"Slurm job {job_id} exceeded the {job_timeout}-second wait limit and was cancelled.")
+    logs = _read_job_log_tail(client, remote_phase, job_id)
+    raise TimeoutError(
+        f"Slurm job {job_id} exceeded the {job_timeout}-second wait limit and was cancelled.\n{logs}".strip()
+    )
 
 
 def _assemble_report(material_name, symbol, lattice_structure, eos_tasks, eos_outputs, followup_tasks, followup_outputs):

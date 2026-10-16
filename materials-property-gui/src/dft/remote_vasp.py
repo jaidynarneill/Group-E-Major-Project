@@ -6,13 +6,7 @@ SSH_HOST = "m3.massive.org.au"
 MODULEFILE_DIRECTORY = "/projects/lh36/sdwi0002/opt/modulefiles"
 REMOTE_SCRATCH_DIRECTORY = "/fs04/scratch2/lh36/jarn0012/vasp"
 REMOTE_SLURM_DIRECTORY = f"{REMOTE_SCRATCH_DIRECTORY.rstrip('/')}/slurm"
-VASP_MODULE = "vasp/6.6"
-VASP_PREREQUISITE_MODULES = (
-    "hpcx/.2.14-redhat9.2-patch1",
-    "hpcx-ompi",
-    "hdf5/1.12.3",
-    "wannier90/3.1.0-mpi",
-)
+VASP_MODULE = "vasp/6.6.1"
 MODULE_INIT_SCRIPT = "/etc/profile.d/modules.sh"
 
 
@@ -33,7 +27,6 @@ def clean_shell_startup_warnings(text):
 def _module_setup_lines():
     return (
         f"module use {shlex.quote(MODULEFILE_DIRECTORY)}",
-        *(f"module load {shlex.quote(module)}" for module in VASP_PREREQUISITE_MODULES),
         f"module load {shlex.quote(VASP_MODULE)}",
     )
 

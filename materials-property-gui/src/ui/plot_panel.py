@@ -307,6 +307,12 @@ class PlotPanel(QWidget):
         self.status_label.setWordWrap(True)
         results_layout.addWidget(self.status_label)
 
+        self.live_log_output = QPlainTextEdit()
+        self.live_log_output.setReadOnly(True)
+        self.live_log_output.setPlaceholderText("Current Slurm and VASP output will appear here.")
+        self.live_log_output.setMaximumHeight(150)
+        results_layout.addWidget(self.live_log_output)
+
         self.result_output = QPlainTextEdit()
         self.result_output.setReadOnly(True)
         self.result_output.setPlaceholderText("Per-run calculation details will appear here.")
@@ -475,6 +481,12 @@ class PlotPanel(QWidget):
         )
         self.canvas.draw()
 
+    def _show_progress(self, message):
+        self.status_label.setText(message.splitlines()[0] if message else "")
+        self.live_log_output.setPlainText(message)
+        scrollbar = self.live_log_output.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
     def run_calculations(self):
         configurations = []
 
@@ -513,13 +525,14 @@ class PlotPanel(QWidget):
 
         self.run_button.setEnabled(False)
         self.status_label.setText("Starting calculations...")
+        self.live_log_output.clear()
         self.result_output.clear()
 
         self._thread = QThread(self)
         self._worker = CalculationWorker(configurations, cluster_credentials)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
-        self._worker.progress.connect(self.status_label.setText)
+        self._worker.progress.connect(self._show_progress)
         self._worker.completed.connect(self.show_results)
         self._worker.finished.connect(self._thread.quit)
         self._worker.finished.connect(self._worker.deleteLater)

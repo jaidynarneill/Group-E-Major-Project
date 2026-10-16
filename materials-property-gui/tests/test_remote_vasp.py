@@ -27,6 +27,12 @@ class TestRemoteVaspInspection(unittest.TestCase):
             f"#SBATCH --error={REMOTE_SLURM_DIRECTORY}/%x-%j.err".encode("ascii"),
             launcher_bytes,
         )
+        launcher = launcher_bytes.decode("ascii")
+        self.assertIn("module use /projects/lh36/sdwi0002/opt/modulefiles", launcher)
+        self.assertIn("module load vasp/6.6.1", launcher)
+        self.assertNotIn("module load hpcx", launcher)
+        self.assertNotIn("module load hdf5", launcher)
+        self.assertNotIn("module load wannier90", launcher)
 
     def test_inspection_authenticates_and_reports_remote_capabilities(self):
         client = Mock()
@@ -55,15 +61,12 @@ class TestRemoteVaspInspection(unittest.TestCase):
         command = client.exec_command.call_args.args[0]
         self.assertIn(MODULEFILE_DIRECTORY, command)
         self.assertIn(VASP_MODULE, command)
-        self.assertIn("hpcx/.2.14-redhat9.2-patch1", command)
-        self.assertIn("module load hpcx-ompi", command)
-        self.assertIn("hdf5/1.12.3", command)
-        self.assertIn("wannier90/3.1.0-mpi", command)
+        self.assertEqual(VASP_MODULE, "vasp/6.6.1")
+        self.assertNotIn("hpcx", command)
+        self.assertNotIn("hdf5", command)
+        self.assertNotIn("wannier90", command)
         self.assertIn("command -v potgen", command)
-        self.assertLess(
-            command.index("module load hpcx/.2.14-redhat9.2-patch1"),
-            command.index("module load hpcx-ompi"),
-        )
+        self.assertLess(command.index("module use"), command.index("module load vasp/6.6.1"))
         self.assertIn(REMOTE_SCRATCH_DIRECTORY, command)
         self.assertEqual(report["slurm_log_directory"], REMOTE_SLURM_DIRECTORY)
         self.assertEqual(report["scratch_entries"], ["POTCAR", "run.sh"])

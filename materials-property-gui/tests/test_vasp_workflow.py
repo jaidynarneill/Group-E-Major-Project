@@ -9,8 +9,10 @@ from ase.build import bulk
 from src.analysis.elastic_properties import EV_A3_TO_GPA, birch_murnaghan
 from src.dft.vasp_workflow import (
     _assemble_report,
+    _job_log_tail_command,
     _stage_phase,
     _validate_remote_environment,
+    _wait_for_job,
     build_bulk_relaxation_task,
     build_eos_tasks,
     build_followup_tasks,
@@ -19,6 +21,35 @@ from src.dft.remote_vasp import VASP_MODULE
 
 
 class TestVaspWorkflow(unittest.TestCase):
+    def test_job_poller_emits_current_log_tail_to_progress_callback(self):
+        client = Mock()
+        progress = Mock()
+        with (
+            patch(
+                "src.dft.vasp_workflow._remote_command",
+                side_effect=[
+                    ("RUNNING", "", 0),
+                    ("--- vasp.log ---\\nDAV: 12 energy=-42.0", "", 0),
+                    ("COMPLETED", "", 0),
+                    ("--- vasp.log ---\\nreached required accuracy", "", 0),
+                ],
+            ),
+            patch("src.dft.vasp_workflow.time.sleep"),
+        ):
+            _wait_for_job(client, "/scratch/job/eos", "98765", progress, 0, 30)
+
+        self.assertIn("RUNNING", progress.call_args_list[0].args[0])
+        self.assertIn("DAV: 12 energy=-42.0", progress.call_args_list[0].args[0])
+        self.assertIn("reached required accuracy", progress.call_args_list[-1].args[0])
+
+    def test_log_tail_reads_task_vasp_and_persistent_slurm_outputs(self):
+        command = _job_log_tail_command("/scratch/job/eos", "98765")
+
+        self.assertIn("/scratch/job/eos/tasks/*/vasp.log", command)
+        self.assertIn("/fs04/scratch2/lh36/jarn0012/vasp/slurm/*-98765.out", command)
+        self.assertIn("/fs04/scratch2/lh36/jarn0012/vasp/slurm/*-98765.err", command)
+        self.assertIn("tail -n 12", command)
+
     def test_cobalt_relaxation_and_eos_inputs_use_logical_settings(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
