@@ -24,6 +24,7 @@ try:
     from dft.remote_vasp import (
         MODULEFILE_DIRECTORY,
         REMOTE_SCRATCH_DIRECTORY,
+        REMOTE_SLURM_DIRECTORY,
         SSH_HOST,
         VASP_PREREQUISITE_MODULES,
         VASP_MODULE,
@@ -47,6 +48,7 @@ except ModuleNotFoundError as error:
     from src.dft.remote_vasp import (
         MODULEFILE_DIRECTORY,
         REMOTE_SCRATCH_DIRECTORY,
+        REMOTE_SLURM_DIRECTORY,
         SSH_HOST,
         VASP_PREREQUISITE_MODULES,
         VASP_MODULE,
@@ -524,6 +526,10 @@ def calculate_remote_dft_report(
         try:
             preflight = _validate_remote_environment(client, symbol)
             progress(f"VASP {VASP_MODULE} and potgen found on the cluster.")
+            _remote_command(
+                client,
+                f"mkdir -m 700 -p {shlex.quote(REMOTE_SLURM_DIRECTORY)}",
+            )
             _remote_command(client, f"mkdir -m 700 {shlex.quote(remote_root)}")
             with tempfile.TemporaryDirectory(prefix="materials-property-") as temporary_directory:
                 local_root = Path(temporary_directory)

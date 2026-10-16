@@ -1,10 +1,12 @@
 import io
 import unittest
+from pathlib import Path
 from unittest.mock import Mock
 
 from src.dft.remote_vasp import (
     MODULEFILE_DIRECTORY,
     REMOTE_SCRATCH_DIRECTORY,
+    REMOTE_SLURM_DIRECTORY,
     SSH_HOST,
     VASP_MODULE,
     inspect_cluster,
@@ -12,6 +14,20 @@ from src.dft.remote_vasp import (
 
 
 class TestRemoteVaspInspection(unittest.TestCase):
+    def test_launcher_starts_with_shebang_and_keeps_logs_outside_job_workspace(self):
+        launcher = Path(__file__).parents[1] / "src" / "dft" / "run.sh"
+        launcher_bytes = launcher.read_bytes()
+
+        self.assertTrue(launcher_bytes.startswith(b"#!/bin/bash\n"))
+        self.assertIn(
+            f"#SBATCH --output={REMOTE_SLURM_DIRECTORY}/%x-%j.out".encode("ascii"),
+            launcher_bytes,
+        )
+        self.assertIn(
+            f"#SBATCH --error={REMOTE_SLURM_DIRECTORY}/%x-%j.err".encode("ascii"),
+            launcher_bytes,
+        )
+
     def test_inspection_authenticates_and_reports_remote_capabilities(self):
         client = Mock()
         sftp = Mock()
@@ -49,6 +65,7 @@ class TestRemoteVaspInspection(unittest.TestCase):
             command.index("module load hpcx-ompi"),
         )
         self.assertIn(REMOTE_SCRATCH_DIRECTORY, command)
+        self.assertEqual(report["slurm_log_directory"], REMOTE_SLURM_DIRECTORY)
         self.assertEqual(report["scratch_entries"], ["POTCAR", "run.sh"])
         self.assertNotIn("secret", repr(report))
         sftp.close.assert_called_once()
