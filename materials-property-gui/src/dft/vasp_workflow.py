@@ -53,7 +53,8 @@ except ModuleNotFoundError as error:
     )
 
 
-VASP_WORKFLOW_VERSION = 4
+VASP_WORKFLOW_VERSION = 6
+VASP_MPI_TASKS = 32
 VASP_KPOINTS_DENSITY = 1464
 VASP_ENCUT_FACTOR = 1.3
 VASP_BULK_RELAX_MAX_STEPS = 99
@@ -66,6 +67,7 @@ VASP_CACHE_BACKEND = (
     "VASP",
     VASP_MODULE,
     VASP_WORKFLOW_VERSION,
+    VASP_MPI_TASKS,
     VASP_KPOINTS_DENSITY,
     VASP_ENCUT_FACTOR,
     VASP_BULK_RELAX_MAX_STEPS,
@@ -145,6 +147,7 @@ def _write_vasp_task(directory, atoms, *, relax=False, relax_cell=False):
         incar.append(f"EDIFFG = -{VASP_SURFACE_FMAX}")
         if not relax_cell:
             incar.append("AMIN = 0.01")
+            incar.append("KPAR = 4")
     (directory / "INCAR.template").write_text("\n".join(incar) + "\n", encoding="ascii")
 
 

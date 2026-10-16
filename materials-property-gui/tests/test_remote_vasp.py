@@ -10,6 +10,7 @@ from src.dft.remote_vasp import (
     VASP_MODULE,
     inspect_cluster,
 )
+from src.dft.vasp_workflow import VASP_MPI_TASKS
 
 
 class TestRemoteVaspInspection(unittest.TestCase):
@@ -18,6 +19,7 @@ class TestRemoteVaspInspection(unittest.TestCase):
         launcher_bytes = launcher.read_bytes()
 
         self.assertTrue(launcher_bytes.startswith(b"#!/bin/bash\n"))
+        self.assertIn(f"#SBATCH --ntasks={VASP_MPI_TASKS}".encode("ascii"), launcher_bytes)
         self.assertIn(b"#SBATCH --constraint=intel", launcher_bytes)
         self.assertIn(b"#SBATCH --output=slurm-%x-%j.out", launcher_bytes)
         self.assertIn(b"#SBATCH --error=slurm-%x-%j.err", launcher_bytes)

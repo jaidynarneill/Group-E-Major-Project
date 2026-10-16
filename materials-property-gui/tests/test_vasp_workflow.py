@@ -21,12 +21,13 @@ from src.dft.vasp_workflow import (
     build_followup_tasks,
 )
 from src.dft.remote_vasp import VASP_MODULE
-from src.dft.vasp_workflow import VASP_WORKFLOW_VERSION
+from src.dft.vasp_workflow import VASP_MPI_TASKS, VASP_WORKFLOW_VERSION
 
 
 class TestVaspWorkflow(unittest.TestCase):
     def test_surface_amin_setting_invalidates_previous_dft_cache(self):
-        self.assertEqual(VASP_WORKFLOW_VERSION, 4)
+        self.assertEqual(VASP_WORKFLOW_VERSION, 6)
+        self.assertEqual(VASP_MPI_TASKS, 32)
 
     def test_failed_job_diagnostics_include_slurm_resource_accounting(self):
         command = _job_accounting_command("61084245")
@@ -127,6 +128,7 @@ class TestVaspWorkflow(unittest.TestCase):
         self.assertEqual(surface_task["atom_count"], 32)
         self.assertIn("LREAL = .FALSE.", incar)
         self.assertIn("AMIN = 0.01", incar)
+        self.assertIn("KPAR = 4", incar)
         self.assertIn("ISIF = 2", incar)
         self.assertIn("Gamma\n8 8 1\n", kpoints)
 
