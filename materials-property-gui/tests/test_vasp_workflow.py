@@ -21,9 +21,13 @@ from src.dft.vasp_workflow import (
     build_followup_tasks,
 )
 from src.dft.remote_vasp import VASP_MODULE
+from src.dft.vasp_workflow import VASP_WORKFLOW_VERSION
 
 
 class TestVaspWorkflow(unittest.TestCase):
+    def test_surface_amin_setting_invalidates_previous_dft_cache(self):
+        self.assertEqual(VASP_WORKFLOW_VERSION, 4)
+
     def test_failed_job_diagnostics_include_slurm_resource_accounting(self):
         command = _job_accounting_command("61084245")
 
@@ -103,6 +107,7 @@ class TestVaspWorkflow(unittest.TestCase):
         self.assertIn("ISIF = 3", relaxation_incar)
         self.assertIn("NSW = 99", relaxation_incar)
         self.assertIn("LREAL = Auto", relaxation_incar)
+        self.assertNotIn("AMIN", relaxation_incar)
         self.assertIn("ISPIN = 2", relaxation_incar)
         self.assertIn("MAGMOM = 4*0.6", relaxation_incar)
         self.assertIn("ISIF = 2", eos_incar)
@@ -111,7 +116,7 @@ class TestVaspWorkflow(unittest.TestCase):
         self.assertNotIn("EDIFFG", eos_incar)
         self.assertAlmostEqual(eos_tasks[0]["lattice_parameter"], 3.5133144702592642 * 0.97)
 
-    def test_aluminum_surface_relaxation_uses_auto_real_space_projectors(self):
+    def test_aluminum_surface_relaxation_uses_same_projector_mode_as_working_shear(self):
         with tempfile.TemporaryDirectory() as directory:
             tasks = build_followup_tasks("Al", "fcc", 4.05, directory)
             surface_directory = Path(directory) / "surface_100"
@@ -120,7 +125,8 @@ class TestVaspWorkflow(unittest.TestCase):
 
         surface_task = next(task for task in tasks if task["name"] == "surface_100")
         self.assertEqual(surface_task["atom_count"], 32)
-        self.assertIn("LREAL = Auto", incar)
+        self.assertIn("LREAL = .FALSE.", incar)
+        self.assertIn("AMIN = 0.01", incar)
         self.assertIn("ISIF = 2", incar)
         self.assertIn("Gamma\n8 8 1\n", kpoints)
 
