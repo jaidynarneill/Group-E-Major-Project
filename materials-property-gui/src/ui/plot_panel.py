@@ -270,6 +270,7 @@ class PlotPanel(QWidget):
         self._last_results = []
         self._last_errors = []
         self.theme_colors = {}
+        self._plot_grid = None
         self.initUI()
 
     def initUI(self):
@@ -379,9 +380,9 @@ class PlotPanel(QWidget):
         self.result_output.setMinimumHeight(120)
         self.result_output.setStyleSheet("QPlainTextEdit { font-size: 18px; }")
 
-        self.figure = Figure(figsize=(13, 26), facecolor="#1e1e1e")
+        self.figure = Figure(figsize=(13, 28), facecolor="#1e1e1e")
         self.canvas = FigureCanvas(self.figure)
-        self.canvas.setMinimumSize(1300, 2600)
+        self.canvas.setMinimumSize(1300, 2800)
         self.output_scroll = QScrollArea()
         self.output_scroll.setWidgetResizable(True)
         self.output_scroll.setMinimumHeight(250)
@@ -518,9 +519,22 @@ class PlotPanel(QWidget):
             return "FCC"
         return ASE_SYMMETRY_LATTICES.get(reference_state.get("symmetry"), "FCC")
 
+    def _get_plot_grid(self):
+        if self._plot_grid is None:
+            self._plot_grid = self.figure.add_gridspec(
+                3,
+                2,
+                height_ratios=(1.0, 1.0, 1.6),
+                hspace=0.42,
+                wspace=0.34,
+            )
+        return self._plot_grid
+
     def show_empty_plots(self, message="Run a configuration to calculate plots."):
         colors = self.theme_colors
         self.figure.clear()
+        self._plot_grid = None
+        grid = self._get_plot_grid()
         self.figure.set_facecolor(colors["surface"])
 
         plot_titles = [
@@ -533,7 +547,7 @@ class PlotPanel(QWidget):
         ]
 
         for index, title in enumerate(plot_titles, start=1):
-            ax = self.figure.add_subplot(3, 2, index)
+            ax = self.figure.add_subplot(grid[(index - 1) // 2, (index - 1) % 2])
             ax.set_facecolor(colors["surface"])
             ax.set_title(title, color=colors["text"])
             ax.tick_params(colors=colors["secondary_text"])
@@ -549,7 +563,7 @@ class PlotPanel(QWidget):
             )
 
         self.figure.subplots_adjust(
-            left=0.10, right=0.98, bottom=0.10, top=0.92, wspace=0.34, hspace=0.42
+            left=0.10, right=0.98, bottom=0.08, top=0.94, wspace=0.34, hspace=0.42
         )
         self.canvas.draw()
 
@@ -711,7 +725,11 @@ class PlotPanel(QWidget):
 
     def _new_axis(self, position, title, xlabel, ylabel, *, projection=None):
         colors = self.theme_colors
-        axis = self.figure.add_subplot(3, 2, position, projection=projection)
+        grid = self._get_plot_grid()
+        axis = self.figure.add_subplot(
+            grid[(position - 1) // 2, (position - 1) % 2],
+            projection=projection,
+        )
         axis.set_facecolor(colors["surface"])
         axis.set_title(title, color=colors["text"])
         axis.set_xlabel(xlabel, color=colors["secondary_text"])
@@ -724,6 +742,7 @@ class PlotPanel(QWidget):
 
     def _plot_eos(self, results):
         self.figure.clear()
+        self._plot_grid = None
         axis = self._new_axis(1, "Equation Of State", "Volume (Å³/cell)", "Energy above minimum (eV/atom)")
         for index, (label, result) in enumerate(results):
             data = result["eos_data"]
@@ -899,7 +918,8 @@ class PlotPanel(QWidget):
                 offset + 0.5,
                 0.0,
                 0.68,
-                f"{label.split(':', 1)[0]} - {label.split(':', 1)[-1].split('/')[0].strip()}",
+                f"{label.split(':', 1)[0]} | {result['material']} | "
+                f"{result['lattice_structure']} | {result['method']}",
                 color=self.theme_colors["text"],
                 ha="center",
                 va="bottom",
@@ -952,7 +972,7 @@ class PlotPanel(QWidget):
                 fractional_positions[:, 0] + offset,
                 fractional_positions[:, 1],
                 fractional_positions[:, 2],
-                s=180,
+                s=240,
                 color=cell_color,
                 edgecolors=self.theme_colors["text"],
                 linewidths=0.7,
@@ -984,7 +1004,8 @@ class PlotPanel(QWidget):
                 offset + 0.5,
                 0.5,
                 1.16,
-                f"{label.split(':', 1)[0]} - {result['symbol']} ({result['lattice_structure']})",
+                f"{label.split(':', 1)[0]} | {result['material']} | "
+                f"{result['lattice_structure']} | {result['method']}",
                 color=self.theme_colors["text"],
                 ha="center",
                 va="bottom",

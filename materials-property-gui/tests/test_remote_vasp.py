@@ -14,15 +14,15 @@ from src.dft.vasp_workflow import VASP_MPI_TASKS
 
 
 class TestRemoteVaspInspection(unittest.TestCase):
-    def test_launcher_starts_with_shebang_and_keeps_logs_outside_job_workspace(self):
+    def test_launcher_starts_with_shebang_and_suppresses_slurm_log_files(self):
         launcher = Path(__file__).parents[1] / "src" / "dft" / "run.sh"
         launcher_bytes = launcher.read_bytes()
 
         self.assertTrue(launcher_bytes.startswith(b"#!/bin/bash\n"))
         self.assertIn(f"#SBATCH --ntasks={VASP_MPI_TASKS}".encode("ascii"), launcher_bytes)
         self.assertIn(b"#SBATCH --constraint=intel", launcher_bytes)
-        self.assertIn(b"#SBATCH --output=slurm-%x-%j.out", launcher_bytes)
-        self.assertIn(b"#SBATCH --error=slurm-%x-%j.err", launcher_bytes)
+        self.assertIn(b"#SBATCH --output=/dev/null", launcher_bytes)
+        self.assertIn(b"#SBATCH --error=/dev/null", launcher_bytes)
         launcher = launcher_bytes.decode("ascii")
         self.assertIn("module use /projects/lh36/sdwi0002/opt/modulefiles", launcher)
         self.assertIn("module load vasp/6.6.1", launcher)
