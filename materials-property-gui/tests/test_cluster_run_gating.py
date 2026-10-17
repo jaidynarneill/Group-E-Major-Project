@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 from src.ui.plot_panel import (
     CalculationWorker,
     PlotPanel,
+    _surface_energy_warning,
     configuration_compatibility_errors,
     configurations_need_cluster_login,
 )
@@ -144,7 +145,7 @@ class TestClusterRunGating(unittest.TestCase):
         self.assertEqual(completed[0][0], [("Run 1: Sodium / BCC / DFT", result)])
         self.assertEqual(result["elastic_data"]["sigma_xy_GPa"], [1.0, 2.0])
         self.assertEqual(result["surface_energy_error"], "surface job failed for [redacted]")
-        self.assertIn("surface energies: surface job failed for [redacted]", completed[0][1][0])
+        self.assertIn("Surface calculation error: surface job failed for [redacted]", completed[0][1][0])
         worker.result_cache.save.assert_called_once_with("Sodium", "BCC", "DFT", result)
 
         cached_worker = CalculationWorker([(1, "Sodium", "BCC", "DFT")])
@@ -156,7 +157,23 @@ class TestClusterRunGating(unittest.TestCase):
         cached_worker.run()
 
         self.assertEqual(cached_completed[0][0], [("Run 1: Sodium / BCC / DFT", result)])
-        self.assertIn("surface energies: surface job failed for [redacted]", cached_completed[0][1][0])
+        self.assertIn("Surface calculation error: surface job failed for [redacted]", cached_completed[0][1][0])
+
+    def test_cached_partial_surface_data_is_recognized_without_failure_metadata(self):
+        warning = _surface_energy_warning(
+            "Aluminum",
+            "FCC",
+            {
+                "surface_energy_data": {
+                    "surfaces": [{"orientation": "(100)"}],
+                },
+            },
+        )
+
+        self.assertEqual(
+            warning,
+            "Incomplete surface-energy data; missing (110), (111).",
+        )
 
     def test_dft_worker_redacts_credentials_from_remote_errors(self):
         worker = CalculationWorker(

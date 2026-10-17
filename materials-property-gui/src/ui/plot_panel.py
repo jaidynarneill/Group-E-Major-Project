@@ -36,7 +36,7 @@ try:
         compute_elastic_properties,
         mace_model_for_method,
     )
-    from analysis.surface_energy import compute_surface_energies
+    from analysis.surface_energy import SURFACE_ORIENTATIONS, compute_surface_energies
     from analysis.result_cache import CalculationResultCache
     from ui.cluster_connection_dialog import ClusterConnectionDialog
 except ModuleNotFoundError as error:
@@ -56,7 +56,7 @@ except ModuleNotFoundError as error:
         compute_elastic_properties,
         mace_model_for_method,
     )
-    from src.analysis.surface_energy import compute_surface_energies
+    from src.analysis.surface_energy import SURFACE_ORIENTATIONS, compute_surface_energies
     from src.analysis.result_cache import CalculationResultCache
     from src.ui.cluster_connection_dialog import ClusterConnectionDialog
 
@@ -108,6 +108,36 @@ def configurations_need_cluster_login(configurations):
     )
 
 
+def _surface_energy_warning(material, lattice, result):
+    surface_data = result.get("surface_energy_data") or {}
+    surface_error = result.get("surface_energy_error")
+    if not surface_data and not surface_error:
+        return None
+    surfaces = surface_data.get("surfaces", [])
+    try:
+        structure = _normalize_structure(lattice)
+        expected = [
+            "(" + "".join(str(index) for index in indices) + ")"
+            for indices in SURFACE_ORIENTATIONS[structure]
+        ]
+    except (KeyError, ValueError):
+        expected = []
+    available = {
+        surface.get("orientation")
+        for surface in surfaces
+        if isinstance(surface, dict)
+    }
+    missing = [orientation for orientation in expected if orientation not in available]
+    if missing:
+        message = "Incomplete surface-energy data; missing " + ", ".join(missing) + "."
+        if surface_error:
+            message += f" Surface calculation error: {surface_error}"
+        return message
+    if surface_error:
+        return f"Surface calculation warning: {surface_error}"
+    return None
+
+
 class CalculationWorker(QObject):
     progress = pyqtSignal(str)
     completed = pyqtSignal(object, object)
@@ -134,9 +164,9 @@ class CalculationWorker(QObject):
                 if cached_result is not None:
                     self.progress.emit(f"Loading cached results for {label}...")
                     results.append((label, cached_result))
-                    surface_error = cached_result.get("surface_energy_error")
-                    if surface_error:
-                        errors.append(f"{label} surface energies: {surface_error}")
+                    surface_warning = _surface_energy_warning(material, lattice, cached_result)
+                    if surface_warning:
+                        errors.append(f"{label} surface energies: {surface_warning}")
                     continue
 
                 self.progress.emit(f"Calculating {label}...")
@@ -165,7 +195,6 @@ class CalculationWorker(QObject):
                                 if secret:
                                     message = message.replace(secret, "[redacted]")
                             result["surface_energy_error"] = message
-                            errors.append(f"{label} surface energies: {message}")
                     else:
                         model = mace_model_for_method(method)
                         calculator = create_calculator(material, method, model=model)
@@ -188,8 +217,11 @@ class CalculationWorker(QObject):
                             )
                         except Exception as error:
                             result["surface_energy_data"] = {"surfaces": []}
-                            errors.append(f"{label} surface energies: {error}")
+                            result["surface_energy_error"] = str(error)
                     results.append((label, result))
+                    surface_warning = _surface_energy_warning(material, lattice, result)
+                    if surface_warning:
+                        errors.append(f"{label} surface energies: {surface_warning}")
                     try:
                         self.result_cache.save(material, lattice, method, result)
                     except Exception as error:
@@ -621,7 +653,12 @@ class PlotPanel(QWidget):
                         f"({converged}; {surface_result['atom_count']} atoms; {surface_result['area_A2']:.2f} Å²)"
                     )
             else:
-                summaries.append("    No surface-energy data returned.")
+                surface_warning = _surface_energy_warning(
+                    result.get("material", ""),
+                    result.get("lattice_structure", ""),
+                    result,
+                )
+                summaries.append(f"    {surface_warning or 'No surface-energy data returned.'}")
             summaries.append("")
         if errors:
             summaries.extend(["Run Errors", *[f"  {error}" for error in errors]])
