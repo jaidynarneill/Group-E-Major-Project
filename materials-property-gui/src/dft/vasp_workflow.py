@@ -93,9 +93,16 @@ def _remote_material_directory(material_name):
     return f"{REMOTE_SCRATCH_DIRECTORY.rstrip('/')}/{folder_name}-Dft"
 
 
-def _remote_run_directory(material_name, run_id=None):
-    run_id = run_id or uuid.uuid4().hex
-    return f"{_remote_material_directory(material_name)}/run-{run_id}"
+def _find_remote_material_directory(sftp, material_name):
+    expected_name = Path(_remote_material_directory(material_name)).name.casefold()
+    try:
+        entries = sftp.listdir(REMOTE_SCRATCH_DIRECTORY)
+    except OSError:
+        return None
+    for entry in entries:
+        if entry.casefold() == expected_name:
+            return f"{REMOTE_SCRATCH_DIRECTORY.rstrip('/')}/{entry}"
+    return None
 
 
 def _kpoint_mesh(atoms):
@@ -553,6 +560,189 @@ def _assemble_report(material_name, symbol, lattice_structure, eos_tasks, eos_ou
     }
 
 
+def _remote_phase_candidates(phase_names, phase_name):
+    return sorted(
+        (
+            name
+            for name in phase_names
+            if name == phase_name
+            or name.startswith(f"{phase_name}-retry-")
+            or name.startswith(f"{phase_name}-resume-")
+        ),
+        reverse=True,
+    )
+
+
+def _load_existing_phase(sftp, remote_run, phase_names, phase_name, tasks, local_phase):
+    for candidate in _remote_phase_candidates(phase_names, phase_name):
+        outputs, missing = _load_remote_phase(
+            sftp,
+            remote_run,
+            candidate,
+            tasks,
+            local_phase,
+        )
+        if not missing:
+            return outputs
+    return None
+
+
+def _new_remote_phase_name(sftp, remote_root, phase_name):
+    try:
+        existing_names = sftp.listdir(remote_root)
+    except OSError:
+        existing_names = [phase_name]
+    if phase_name not in existing_names:
+        return phase_name
+    return f"{phase_name}-retry-{uuid.uuid4().hex}"
+
+
+def _load_remote_phase(sftp, remote_run, phase_name, tasks, local_phase):
+    outputs = {}
+    missing = []
+    for task in tasks:
+        local_task = Path(local_phase) / task["name"]
+        remote_task = f"{remote_run}/{phase_name}/tasks/{task['name']}"
+        try:
+            for filename in ("POSCAR", "KPOINTS", "INCAR.template"):
+                with sftp.open(f"{remote_task}/{filename}", "rb") as remote_file:
+                    remote_contents = remote_file.read()
+                if remote_contents != (local_task / filename).read_bytes():
+                    raise ValueError(f"{task['name']} inputs do not match this run.")
+            local_outcar = local_task / "OUTCAR.reused"
+            sftp.get(f"{remote_task}/OUTCAR", str(local_outcar))
+            outputs[task["name"]] = _read_vasp_result(local_outcar)
+        except Exception:
+            missing.append(task)
+    return outputs, missing
+
+
+def _inspect_remote_run(sftp, remote_run, material_name, lattice_structure):
+    with tempfile.TemporaryDirectory(prefix="materials-property-reuse-") as directory:
+        local_root = Path(directory)
+        try:
+            phase_names = sftp.listdir(remote_run)
+        except OSError:
+            return None
+        relaxation_directory = local_root / "bulk_relax"
+        relaxation_task = build_bulk_relaxation_task(
+            material_name,
+            lattice_structure,
+            relaxation_directory,
+        )
+        relaxation_outputs = _load_existing_phase(
+            sftp,
+            remote_run,
+            phase_names,
+            "bulk-relax",
+            [relaxation_task],
+            relaxation_directory,
+        )
+        if relaxation_outputs is None:
+            return None
+        relaxed_volume = relaxation_outputs[relaxation_task["name"]]["volume_A3"]
+        if not np.isfinite(relaxed_volume) or relaxed_volume <= 0.0:
+            return None
+
+        relaxed_lattice = float(np.cbrt(relaxed_volume))
+        eos_directory = local_root / "eos"
+        _, symbol, _, eos_tasks = build_eos_tasks(
+            material_name,
+            lattice_structure,
+            eos_directory,
+            reference_lattice=relaxed_lattice,
+        )
+        eos_outputs = _load_existing_phase(
+            sftp,
+            remote_run,
+            phase_names,
+            "eos",
+            eos_tasks,
+            eos_directory,
+        )
+        if eos_outputs is None:
+            return None
+
+        fit_parameters = _fit_eos(material_name, lattice_structure, eos_tasks, eos_outputs)
+        equilibrium_lattice = float(np.cbrt(fit_parameters[1]))
+        followup_directory = local_root / "followup"
+        followup_tasks = build_followup_tasks(
+            symbol,
+            lattice_structure,
+            equilibrium_lattice,
+            followup_directory,
+        )
+        elastic_tasks = [task for task in followup_tasks if task["kind"] != "surface"]
+        followup_outputs = _load_existing_phase(
+            sftp,
+            remote_run,
+            phase_names,
+            "elastic",
+            elastic_tasks,
+            followup_directory,
+        )
+        if followup_outputs is None:
+            followup_outputs = _load_existing_phase(
+                sftp,
+                remote_run,
+                phase_names,
+                "followup",
+                elastic_tasks,
+                followup_directory,
+            )
+        if followup_outputs is None:
+            return None
+
+        surface_tasks = [task for task in followup_tasks if task["kind"] == "surface"]
+        surface_phases = _remote_phase_candidates(phase_names, "surfaces")
+        if "followup" in phase_names:
+            surface_phases.append("followup")
+        surface_phases.sort(reverse=True)
+        missing_surfaces = []
+        for task in surface_tasks:
+            for phase_name in surface_phases:
+                surface_outputs, missing = _load_remote_phase(
+                    sftp,
+                    remote_run,
+                    phase_name,
+                    [task],
+                    followup_directory,
+                )
+                if not missing:
+                    followup_outputs.update(surface_outputs)
+                    break
+            else:
+                missing_surfaces.append(task)
+
+        report = _assemble_report(
+            material_name,
+            symbol,
+            lattice_structure,
+            eos_tasks,
+            eos_outputs,
+            followup_tasks,
+            followup_outputs,
+        )
+        return {
+            "report": report,
+            "eos_tasks": eos_tasks,
+            "eos_outputs": eos_outputs,
+            "followup_tasks": followup_tasks,
+            "followup_outputs": followup_outputs,
+            "missing_surfaces": missing_surfaces,
+        }
+
+
+def _find_reusable_remote_run(sftp, material_directory, material_name, lattice_structure):
+    try:
+        run = _inspect_remote_run(sftp, material_directory, material_name, lattice_structure)
+    except Exception:
+        return None
+    if run is not None:
+        run["remote_run"] = material_directory
+    return run
+
+
 def calculate_remote_dft_report(
     material,
     lattice_structure,
@@ -572,101 +762,144 @@ def calculate_remote_dft_report(
 
     client = None
     remote_material_root = _remote_material_directory(material_name)
-    remote_root = _remote_run_directory(material_name)
     try:
         progress(f"Connecting to {SSH_HOST}...")
         client = _connect(username.strip(), password)
         sftp = client.open_sftp()
         try:
+            reusable_run = None
+            existing_material_root = _find_remote_material_directory(sftp, material_name)
+            if existing_material_root is not None:
+                remote_material_root = existing_material_root
+                progress(f"Checking saved DFT stages for {material_name}...")
+                reusable_run = _find_reusable_remote_run(
+                    sftp,
+                    remote_material_root,
+                    material_name,
+                    lattice_structure,
+                )
+                if reusable_run is not None and not reusable_run["missing_surfaces"]:
+                    progress(
+                        f"Reusing complete DFT results for {material_name} from "
+                        f"{Path(reusable_run['remote_run']).name}."
+                    )
+                    return reusable_run["report"]
+                if reusable_run is not None:
+                    progress(
+                        f"Reusing completed EOS and elastic stages; resuming "
+                        f"{len(reusable_run['missing_surfaces'])} surface task(s)."
+                    )
+                else:
+                    progress("No reusable completed stages found; starting a new DFT run.")
+
             preflight = _validate_remote_environment(client, symbol)
             progress(f"VASP {VASP_MODULE} and potgen found on the cluster.")
-            _remote_command(
-                client,
-                f"rm -rf -- {shlex.quote(REMOTE_SCRATCH_DIRECTORY.rstrip('/') + '/slurm')}",
-            )
-            _remote_command(client, f"mkdir -m 700 -p {shlex.quote(remote_material_root)}")
-            _remote_command(client, f"mkdir -m 700 {shlex.quote(remote_root)}")
+            if reusable_run is None:
+                _remote_command(
+                    client,
+                    f"rm -rf -- {shlex.quote(REMOTE_SCRATCH_DIRECTORY.rstrip('/') + '/slurm')}",
+                )
+                _remote_command(client, f"mkdir -m 700 -p {shlex.quote(remote_material_root)}")
+                remote_root = remote_material_root
+                _remote_command(client, f"mkdir -m 700 -p {shlex.quote(remote_root)}")
+            else:
+                remote_root = remote_material_root
             with tempfile.TemporaryDirectory(prefix="materials-property-") as temporary_directory:
                 local_root = Path(temporary_directory)
-                relaxation_directory = local_root / "bulk_relax"
-                relaxation_task = build_bulk_relaxation_task(
-                    material_name,
-                    lattice_structure,
-                    relaxation_directory,
-                )
-                relaxation_outputs = _stage_phase(
-                    sftp,
-                    client,
-                    remote_root,
-                    "bulk-relax",
-                    [relaxation_task],
-                    symbol,
-                    relaxation_directory,
-                    f"dft-{symbol.lower()}-relax",
-                    progress,
-                    poll_interval,
-                    job_timeout,
-                )
-                relaxed_volume = relaxation_outputs[relaxation_task["name"]]["volume_A3"]
-                if not np.isfinite(relaxed_volume) or relaxed_volume <= 0.0:
-                    raise RuntimeError("Bulk relaxation returned an invalid cell volume.")
-                relaxed_lattice = float(np.cbrt(relaxed_volume))
-                progress(f"Bulk relaxation complete; starting EOS around {relaxed_lattice:.6f} Å.")
-
-                eos_directory = local_root / "eos"
-                _, _, _, eos_tasks = build_eos_tasks(
-                    material_name,
-                    lattice_structure,
-                    eos_directory,
-                    reference_lattice=relaxed_lattice,
-                )
-                eos_outputs = _stage_phase(
-                    sftp,
-                    client,
-                    remote_root,
-                    "eos",
-                    eos_tasks,
-                    symbol,
-                    eos_directory,
-                    f"dft-{symbol.lower()}-eos",
-                    progress,
-                    poll_interval,
-                    job_timeout,
-                )
-                fit_parameters = _fit_eos(material_name, lattice_structure, eos_tasks, eos_outputs)
-                equilibrium_lattice = float(np.cbrt(fit_parameters[1]))
-                progress(f"EOS fit complete; equilibrium lattice parameter {equilibrium_lattice:.6f} Å.")
-
                 followup_directory = local_root / "followup"
-                followup_tasks = build_followup_tasks(
-                    symbol,
-                    crystal_structure,
-                    equilibrium_lattice,
-                    followup_directory,
-                )
-                elastic_tasks = [task for task in followup_tasks if task["kind"] != "surface"]
-                surface_tasks = [task for task in followup_tasks if task["kind"] == "surface"]
-                followup_outputs = _stage_phase(
-                    sftp,
-                    client,
-                    remote_root,
-                    "elastic",
-                    elastic_tasks,
-                    symbol,
-                    followup_directory,
-                    f"dft-{symbol.lower()}-elastic",
-                    progress,
-                    poll_interval,
-                    job_timeout,
-                )
+                if reusable_run is None:
+                    relaxation_directory = local_root / "bulk_relax"
+                    relaxation_task = build_bulk_relaxation_task(
+                        material_name,
+                        lattice_structure,
+                        relaxation_directory,
+                    )
+                    relaxation_outputs = _stage_phase(
+                        sftp,
+                        client,
+                        remote_root,
+                        _new_remote_phase_name(sftp, remote_root, "bulk-relax"),
+                        [relaxation_task],
+                        symbol,
+                        relaxation_directory,
+                        f"dft-{symbol.lower()}-relax",
+                        progress,
+                        poll_interval,
+                        job_timeout,
+                    )
+                    relaxed_volume = relaxation_outputs[relaxation_task["name"]]["volume_A3"]
+                    if not np.isfinite(relaxed_volume) or relaxed_volume <= 0.0:
+                        raise RuntimeError("Bulk relaxation returned an invalid cell volume.")
+                    relaxed_lattice = float(np.cbrt(relaxed_volume))
+                    progress(f"Bulk relaxation complete; starting EOS around {relaxed_lattice:.6f} Å.")
+
+                    eos_directory = local_root / "eos"
+                    _, _, _, eos_tasks = build_eos_tasks(
+                        material_name,
+                        lattice_structure,
+                        eos_directory,
+                        reference_lattice=relaxed_lattice,
+                    )
+                    eos_outputs = _stage_phase(
+                        sftp,
+                        client,
+                        remote_root,
+                        _new_remote_phase_name(sftp, remote_root, "eos"),
+                        eos_tasks,
+                        symbol,
+                        eos_directory,
+                        f"dft-{symbol.lower()}-eos",
+                        progress,
+                        poll_interval,
+                        job_timeout,
+                    )
+                    fit_parameters = _fit_eos(material_name, lattice_structure, eos_tasks, eos_outputs)
+                    equilibrium_lattice = float(np.cbrt(fit_parameters[1]))
+                    progress(f"EOS fit complete; equilibrium lattice parameter {equilibrium_lattice:.6f} Å.")
+                    followup_tasks = build_followup_tasks(
+                        symbol,
+                        crystal_structure,
+                        equilibrium_lattice,
+                        followup_directory,
+                    )
+                    elastic_tasks = [task for task in followup_tasks if task["kind"] != "surface"]
+                    surface_tasks = [task for task in followup_tasks if task["kind"] == "surface"]
+                    followup_outputs = _stage_phase(
+                        sftp,
+                        client,
+                        remote_root,
+                        _new_remote_phase_name(sftp, remote_root, "elastic"),
+                        elastic_tasks,
+                        symbol,
+                        followup_directory,
+                        f"dft-{symbol.lower()}-elastic",
+                        progress,
+                        poll_interval,
+                        job_timeout,
+                    )
+                else:
+                    eos_tasks = reusable_run["eos_tasks"]
+                    eos_outputs = reusable_run["eos_outputs"]
+                    followup_tasks = build_followup_tasks(
+                        symbol,
+                        crystal_structure,
+                        reusable_run["report"]["a0"],
+                        followup_directory,
+                    )
+                    surface_tasks = reusable_run["missing_surfaces"]
+                    followup_outputs = reusable_run["followup_outputs"]
+
                 surface_error = None
                 if surface_tasks:
                     try:
+                        surface_phase = _new_remote_phase_name(sftp, remote_root, "surfaces")
+                        if reusable_run is not None and surface_phase == "surfaces":
+                            surface_phase = f"surfaces-resume-{uuid.uuid4().hex}"
                         surface_outputs = _stage_phase(
                             sftp,
                             client,
                             remote_root,
-                            "surfaces",
+                            surface_phase,
                             surface_tasks,
                             symbol,
                             followup_directory,

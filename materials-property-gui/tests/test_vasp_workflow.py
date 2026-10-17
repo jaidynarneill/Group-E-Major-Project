@@ -12,7 +12,6 @@ from src.dft.vasp_workflow import (
     _job_accounting_command,
     _job_log_tail_command,
     _remote_material_directory,
-    _remote_run_directory,
     _stage_phase,
     _validate_remote_environment,
     _wait_for_job,
@@ -20,8 +19,10 @@ from src.dft.vasp_workflow import (
     build_eos_tasks,
     build_followup_tasks,
     calculate_remote_dft_report,
+    _find_remote_material_directory,
+    _inspect_remote_run,
 )
-from src.dft.remote_vasp import VASP_MODULE
+from src.dft.remote_vasp import REMOTE_SCRATCH_DIRECTORY, VASP_MODULE
 from src.dft.vasp_workflow import VASP_MPI_TASKS, VASP_WORKFLOW_VERSION
 
 
@@ -48,15 +49,19 @@ class TestVaspWorkflow(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "FAILED\\|139:0\\|3G"):
                 _wait_for_job(client, "/scratch/job/followup", "61084245", Mock(), 0, 30)
 
-    def test_material_named_run_directories_allow_reruns(self):
+    def test_material_directory_is_the_flat_run_root(self):
         material_directory = _remote_material_directory("Aluminum")
-        first_run = _remote_run_directory("Aluminum", "run-one")
-        second_run = _remote_run_directory("Aluminum", "run-two")
 
         self.assertTrue(material_directory.endswith("/Aluminum-Dft"))
-        self.assertTrue(first_run.startswith(material_directory + "/run-"))
-        self.assertTrue(second_run.startswith(material_directory + "/run-"))
-        self.assertNotEqual(first_run, second_run)
+
+    def test_material_directory_lookup_ignores_folder_name_case(self):
+        sftp = Mock()
+        sftp.listdir.return_value = ["Copper-Dft", "aluminum-dft"]
+
+        self.assertEqual(
+            _find_remote_material_directory(sftp, "Aluminum"),
+            f"{REMOTE_SCRATCH_DIRECTORY}/aluminum-dft",
+        )
 
     def test_job_poller_reports_state_without_streaming_logs(self):
         client = Mock()
@@ -288,6 +293,7 @@ class TestVaspWorkflow(unittest.TestCase):
 
     def test_surface_phase_failure_preserves_elastic_report(self):
         client = Mock()
+        client.open_sftp.return_value.listdir.return_value = []
         eos_tasks = [{"name": "eos_00", "lattice_parameter": 4.0}]
         followup_tasks = [
             {"name": "normal_00", "kind": "normal_stress"},
@@ -312,6 +318,7 @@ class TestVaspWorkflow(unittest.TestCase):
 
         with (
             patch("src.dft.vasp_workflow._connect", return_value=client),
+            patch("src.dft.vasp_workflow._find_remote_material_directory", return_value=None),
             patch("src.dft.vasp_workflow._validate_remote_environment"),
             patch("src.dft.vasp_workflow._remote_command"),
             patch("src.dft.vasp_workflow.build_bulk_relaxation_task", return_value={"name": "bulk_relax"}),
@@ -334,6 +341,132 @@ class TestVaspWorkflow(unittest.TestCase):
         self.assertEqual(result["elastic_data"], report["elastic_data"])
         self.assertEqual(result["surface_energy_data"]["surfaces"], [])
         self.assertEqual(result["surface_energy_error"], "surface Slurm job failed")
+
+    def test_complete_remote_run_is_reused_without_preflight_or_submission(self):
+        client = Mock()
+        report = {"method": "DFT", "material": "Aluminum", "C11": 100.0}
+        reusable_run = {
+            "report": report,
+            "missing_surfaces": [],
+            "remote_run": "/shared/Aluminum-Dft/run-complete",
+        }
+
+        with (
+            patch("src.dft.vasp_workflow._connect", return_value=client),
+            patch(
+                "src.dft.vasp_workflow._find_remote_material_directory",
+                return_value="/shared/Aluminum-Dft",
+            ),
+            patch("src.dft.vasp_workflow._find_reusable_remote_run", return_value=reusable_run),
+            patch("src.dft.vasp_workflow._validate_remote_environment") as preflight,
+            patch("src.dft.vasp_workflow._stage_phase") as stage_phase,
+        ):
+            result = calculate_remote_dft_report("Aluminum", "FCC", "student", "secret")
+
+        self.assertIs(result, report)
+        preflight.assert_not_called()
+        stage_phase.assert_not_called()
+
+    def test_elastic_complete_remote_run_resumes_only_missing_surfaces(self):
+        client = Mock()
+        sftp = client.open_sftp.return_value
+        sftp.listdir.return_value = []
+        surface_task = {"name": "surface_100", "kind": "surface"}
+        followup_tasks = [
+            {"name": "normal_00", "kind": "normal_stress"},
+            {"name": "shear_00", "kind": "shear_stress"},
+            surface_task,
+        ]
+        eos_tasks = [{"name": "eos_00"}]
+        eos_outputs = {"eos_00": {"energy": -1.0}}
+        elastic_outputs = {
+            "normal_00": {"stress": np.ones(6)},
+            "shear_00": {"stress": np.ones(6)},
+        }
+        reusable_run = {
+            "remote_run": "/shared/Aluminum-Dft",
+            "report": {"a0": 4.0},
+            "eos_tasks": eos_tasks,
+            "eos_outputs": eos_outputs,
+            "followup_tasks": followup_tasks,
+            "followup_outputs": elastic_outputs,
+            "missing_surfaces": [surface_task],
+        }
+        surface_output = {"surface_100": {"energy": -0.5, "forces": np.zeros((1, 3))}}
+        report = {"method": "DFT", "surface_energy_data": {"surfaces": []}}
+
+        with (
+            patch("src.dft.vasp_workflow._connect", return_value=client),
+            patch(
+                "src.dft.vasp_workflow._find_remote_material_directory",
+                return_value="/shared/Aluminum-Dft",
+            ),
+            patch("src.dft.vasp_workflow._find_reusable_remote_run", return_value=reusable_run),
+            patch("src.dft.vasp_workflow._validate_remote_environment"),
+            patch("src.dft.vasp_workflow.build_followup_tasks", return_value=followup_tasks),
+            patch("src.dft.vasp_workflow._stage_phase", return_value=surface_output) as stage_phase,
+            patch("src.dft.vasp_workflow._assemble_report", return_value=report) as assemble_report,
+        ):
+            result = calculate_remote_dft_report("Aluminum", "FCC", "student", "secret")
+
+        self.assertEqual(result, report)
+        self.assertEqual(stage_phase.call_count, 1)
+        self.assertTrue(stage_phase.call_args.args[3].startswith("surfaces-resume-"))
+        self.assertEqual(stage_phase.call_args.args[2], "/shared/Aluminum-Dft")
+        self.assertEqual(stage_phase.call_args.args[4], [surface_task])
+        self.assertEqual(
+            assemble_report.call_args.args[-1],
+            {**elastic_outputs, **surface_output},
+        )
+
+    def test_remote_run_inspection_detects_partial_surface_stage(self):
+        sftp = Mock()
+        sftp.listdir.return_value = ["bulk-relax", "eos", "elastic", "surfaces"]
+        eos_tasks = [{"name": "eos_00", "lattice_parameter": 4.0}]
+        followup_tasks = [
+            {"name": "normal_00", "kind": "normal_stress"},
+            {"name": "shear_00", "kind": "shear_stress"},
+            {"name": "surface_100", "kind": "surface"},
+            {"name": "surface_110", "kind": "surface"},
+        ]
+        elastic_outputs = {
+            "normal_00": {"stress": np.ones(6)},
+            "shear_00": {"stress": np.ones(6)},
+        }
+        surface_output = {"surface_100": {"energy": -0.5, "forces": np.zeros((1, 3))}}
+        report = {"method": "DFT", "a0": 4.0}
+
+        with (
+            patch(
+                "src.dft.vasp_workflow.build_bulk_relaxation_task",
+                return_value={"name": "bulk_relax", "kind": "bulk_relax"},
+            ),
+            patch(
+                "src.dft.vasp_workflow._load_remote_phase",
+                side_effect=[
+                    ({"bulk_relax": {"volume_A3": 64.0}}, []),
+                    ({"eos_00": {"energy": -1.0}}, []),
+                    (elastic_outputs, []),
+                    (surface_output, []),
+                    ({}, [followup_tasks[-1]]),
+                ],
+            ) as load_phase,
+            patch(
+                "src.dft.vasp_workflow.build_eos_tasks",
+                return_value=("Aluminum", "Al", "fcc", eos_tasks),
+            ),
+            patch("src.dft.vasp_workflow._fit_eos", return_value=np.array([-1.0, 64.0, 0.4, 4.0])),
+            patch("src.dft.vasp_workflow.build_followup_tasks", return_value=followup_tasks),
+            patch("src.dft.vasp_workflow._assemble_report", return_value=report),
+        ):
+            result = _inspect_remote_run(sftp, "/shared/Aluminum-Dft/run-one", "Aluminum", "FCC")
+
+        self.assertEqual(result["missing_surfaces"], [followup_tasks[-1]])
+        self.assertEqual(result["followup_outputs"]["surface_100"], surface_output["surface_100"])
+        self.assertEqual(
+            [call.args[2] for call in load_phase.call_args_list],
+            ["bulk-relax", "eos", "elastic", "surfaces", "surfaces"],
+        )
 
 
 if __name__ == "__main__":
