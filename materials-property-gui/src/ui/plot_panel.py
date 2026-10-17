@@ -117,6 +117,11 @@ def configurations_need_cluster_login(configurations, result_cache=None):
     return False
 
 
+def _configuration_plot_caption(label):
+    run_name, _, configuration = label.partition(":")
+    return f"{run_name.strip()} | {configuration.strip().replace(' / ', ' | ')}"
+
+
 def _surface_energy_warning(material, lattice, result):
     surface_data = result.get("surface_energy_data") or {}
     surface_error = result.get("surface_energy_error")
@@ -879,7 +884,7 @@ class PlotPanel(QWidget):
                 )
             except (KeyError, ValueError):
                 continue
-            surfaces.append((label, modulus))
+            surfaces.append((label, result, modulus))
 
         if not surfaces:
             axis.text2D(
@@ -893,12 +898,12 @@ class PlotPanel(QWidget):
             )
             return
 
-        minimum = min(float(modulus.min()) for _, modulus in surfaces)
-        maximum = max(float(modulus.max()) for _, modulus in surfaces)
+        minimum = min(float(modulus.min()) for _, _, modulus in surfaces)
+        maximum = max(float(modulus.max()) for _, _, modulus in surfaces)
         if np.isclose(minimum, maximum):
             maximum = minimum + 1.0
         normalization = colors.Normalize(vmin=minimum, vmax=maximum)
-        for index, (label, modulus) in enumerate(surfaces):
+        for index, (label, result, modulus) in enumerate(surfaces):
             radius = 0.52 * modulus / maximum
             offset = index * 1.65
             x = offset + 0.5 + radius * directions[:, :, 0]
@@ -918,8 +923,7 @@ class PlotPanel(QWidget):
                 offset + 0.5,
                 0.0,
                 0.68,
-                f"{label.split(':', 1)[0]} | {result['material']} | "
-                f"{result['lattice_structure']} | {result['method']}",
+                _configuration_plot_caption(label),
                 color=self.theme_colors["text"],
                 ha="center",
                 va="bottom",
@@ -1004,8 +1008,7 @@ class PlotPanel(QWidget):
                 offset + 0.5,
                 0.5,
                 1.16,
-                f"{label.split(':', 1)[0]} | {result['material']} | "
-                f"{result['lattice_structure']} | {result['method']}",
+                _configuration_plot_caption(label),
                 color=self.theme_colors["text"],
                 ha="center",
                 va="bottom",

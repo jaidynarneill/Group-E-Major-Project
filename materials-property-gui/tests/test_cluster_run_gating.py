@@ -7,6 +7,7 @@ from src.ui.plot_panel import (
     CalculationWorker,
     PlotPanel,
     _surface_energy_warning,
+    _configuration_plot_caption,
     configuration_compatibility_errors,
     configurations_need_cluster_login,
 )
@@ -20,6 +21,12 @@ from src.ui.cluster_connection_dialog import (
 
 
 class TestClusterRunGating(unittest.TestCase):
+    def test_plot_caption_uses_selected_configuration_method(self):
+        self.assertEqual(
+            _configuration_plot_caption("Run 2: Aluminum / FCC / MEAM"),
+            "Run 2 | Aluminum | FCC | MEAM",
+        )
+
     def test_dropdown_lists_only_materials_with_meam_records(self):
         self.assertEqual(
             PlotPanel.MATERIALS,
