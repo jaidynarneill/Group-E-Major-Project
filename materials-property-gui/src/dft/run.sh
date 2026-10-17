@@ -3,6 +3,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=16
 #SBATCH --ntasks-per-node=16
+#SBATCH --partition=fitc,genomics,genomicsb,comp
+#SBATCH --qos=irq
 #SBATCH --constraint=intel
 #SBATCH --time=02:00:00
 #SBATCH --output=/dev/null
