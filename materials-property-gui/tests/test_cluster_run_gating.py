@@ -121,6 +121,43 @@ class TestClusterRunGating(unittest.TestCase):
         self.assertEqual(completed[0], ([("Run 2: Sodium / BCC / DFT", result)], []))
         self.assertIsNone(worker.cluster_credentials)
 
+    def test_dft_worker_keeps_elastic_results_when_surface_phase_fails(self):
+        worker = CalculationWorker(
+            [(1, "Sodium", "BCC", "DFT")],
+            cluster_credentials=("student", "secret"),
+        )
+        worker.result_cache.load = Mock(return_value=None)
+        worker.result_cache.save = Mock()
+        completed = []
+        worker.completed.connect(lambda results, errors: completed.append((results, errors)))
+        result = {
+            "material": "Sodium",
+            "method": "DFT",
+            "elastic_data": {"sigma_xy_GPa": [1.0, 2.0]},
+            "surface_energy_data": {"surfaces": []},
+            "surface_energy_error": "surface job failed for secret",
+        }
+
+        with patch("src.dft.vasp_workflow.calculate_remote_dft_report", return_value=result):
+            worker.run()
+
+        self.assertEqual(completed[0][0], [("Run 1: Sodium / BCC / DFT", result)])
+        self.assertEqual(result["elastic_data"]["sigma_xy_GPa"], [1.0, 2.0])
+        self.assertEqual(result["surface_energy_error"], "surface job failed for [redacted]")
+        self.assertIn("surface energies: surface job failed for [redacted]", completed[0][1][0])
+        worker.result_cache.save.assert_called_once_with("Sodium", "BCC", "DFT", result)
+
+        cached_worker = CalculationWorker([(1, "Sodium", "BCC", "DFT")])
+        cached_worker.result_cache.load = Mock(return_value=result)
+        cached_completed = []
+        cached_worker.completed.connect(
+            lambda results, errors: cached_completed.append((results, errors))
+        )
+        cached_worker.run()
+
+        self.assertEqual(cached_completed[0][0], [("Run 1: Sodium / BCC / DFT", result)])
+        self.assertIn("surface energies: surface job failed for [redacted]", cached_completed[0][1][0])
+
     def test_dft_worker_redacts_credentials_from_remote_errors(self):
         worker = CalculationWorker(
             [(1, "Sodium", "BCC", "DFT")],

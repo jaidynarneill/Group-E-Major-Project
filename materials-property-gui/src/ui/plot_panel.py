@@ -134,6 +134,9 @@ class CalculationWorker(QObject):
                 if cached_result is not None:
                     self.progress.emit(f"Loading cached results for {label}...")
                     results.append((label, cached_result))
+                    surface_error = cached_result.get("surface_energy_error")
+                    if surface_error:
+                        errors.append(f"{label} surface energies: {surface_error}")
                     continue
 
                 self.progress.emit(f"Calculating {label}...")
@@ -155,6 +158,14 @@ class CalculationWorker(QObject):
                             password,
                             progress=self.progress.emit,
                         )
+                        surface_error = result.get("surface_energy_error")
+                        if surface_error:
+                            message = str(surface_error)
+                            for secret in self.cluster_credentials:
+                                if secret:
+                                    message = message.replace(secret, "[redacted]")
+                            result["surface_energy_error"] = message
+                            errors.append(f"{label} surface energies: {message}")
                     else:
                         model = mace_model_for_method(method)
                         calculator = create_calculator(material, method, model=model)

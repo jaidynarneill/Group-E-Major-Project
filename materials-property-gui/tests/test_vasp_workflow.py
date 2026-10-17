@@ -19,6 +19,7 @@ from src.dft.vasp_workflow import (
     build_bulk_relaxation_task,
     build_eos_tasks,
     build_followup_tasks,
+    calculate_remote_dft_report,
 )
 from src.dft.remote_vasp import VASP_MODULE
 from src.dft.vasp_workflow import VASP_MPI_TASKS, VASP_WORKFLOW_VERSION
@@ -26,7 +27,7 @@ from src.dft.vasp_workflow import VASP_MPI_TASKS, VASP_WORKFLOW_VERSION
 
 class TestVaspWorkflow(unittest.TestCase):
     def test_surface_amin_setting_invalidates_previous_dft_cache(self):
-        self.assertEqual(VASP_WORKFLOW_VERSION, 7)
+        self.assertEqual(VASP_WORKFLOW_VERSION, 8)
         self.assertEqual(VASP_MPI_TASKS, 16)
 
     def test_failed_job_diagnostics_include_slurm_resource_accounting(self):
@@ -265,6 +266,74 @@ class TestVaspWorkflow(unittest.TestCase):
         self.assertAlmostEqual(report["C44"], expected_c44, places=5)
         self.assertEqual(len(report["surface_energy_data"]["surfaces"]), 3)
         self.assertTrue(all(item["converged"] for item in report["surface_energy_data"]["surfaces"]))
+
+        elastic_outputs = {
+            task["name"]: followup_outputs[task["name"]]
+            for task in followup_tasks
+            if task["kind"] != "surface"
+        }
+        elastic_report = _assemble_report(
+            "Sodium",
+            "Na",
+            "BCC",
+            eos_tasks,
+            eos_outputs,
+            followup_tasks,
+            elastic_outputs,
+        )
+        self.assertAlmostEqual(elastic_report["C11"], expected_c11, places=5)
+        self.assertAlmostEqual(elastic_report["C12"], expected_c12, places=5)
+        self.assertAlmostEqual(elastic_report["C44"], expected_c44, places=5)
+        self.assertEqual(elastic_report["surface_energy_data"]["surfaces"], [])
+
+    def test_surface_phase_failure_preserves_elastic_report(self):
+        client = Mock()
+        eos_tasks = [{"name": "eos_00", "lattice_parameter": 4.0}]
+        followup_tasks = [
+            {"name": "normal_00", "kind": "normal_stress"},
+            {"name": "shear_00", "kind": "shear_stress"},
+            {"name": "surface_100", "kind": "surface"},
+        ]
+        elastic_outputs = {
+            "normal_00": {"stress": np.ones(6)},
+            "shear_00": {"stress": np.ones(6)},
+        }
+        report = {
+            "method": "DFT",
+            "elastic_data": {"sigma_xy_GPa": np.ones(3)},
+            "surface_energy_data": {"surfaces": []},
+        }
+        stage_results = [
+            {"bulk_relax": {"volume_A3": 64.0}},
+            {"eos_00": {"energy": -1.0}},
+            elastic_outputs,
+            RuntimeError("surface Slurm job failed"),
+        ]
+
+        with (
+            patch("src.dft.vasp_workflow._connect", return_value=client),
+            patch("src.dft.vasp_workflow._validate_remote_environment"),
+            patch("src.dft.vasp_workflow._remote_command"),
+            patch("src.dft.vasp_workflow.build_bulk_relaxation_task", return_value={"name": "bulk_relax"}),
+            patch(
+                "src.dft.vasp_workflow.build_eos_tasks",
+                return_value=("Aluminum", "Al", "fcc", eos_tasks),
+            ),
+            patch("src.dft.vasp_workflow._fit_eos", return_value=np.array([-1.0, 64.0, 0.4, 4.0])),
+            patch("src.dft.vasp_workflow.build_followup_tasks", return_value=followup_tasks),
+            patch("src.dft.vasp_workflow._stage_phase", side_effect=stage_results) as stage_phase,
+            patch("src.dft.vasp_workflow._assemble_report", return_value=report) as assemble_report,
+        ):
+            result = calculate_remote_dft_report("Aluminum", "FCC", "student", "secret")
+
+        self.assertEqual(
+            [call.args[3] for call in stage_phase.call_args_list],
+            ["bulk-relax", "eos", "elastic", "surfaces"],
+        )
+        self.assertEqual(assemble_report.call_args.args[-1], elastic_outputs)
+        self.assertEqual(result["elastic_data"], report["elastic_data"])
+        self.assertEqual(result["surface_energy_data"]["surfaces"], [])
+        self.assertEqual(result["surface_energy_error"], "surface Slurm job failed")
 
 
 if __name__ == "__main__":

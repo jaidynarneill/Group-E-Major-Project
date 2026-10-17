@@ -53,7 +53,7 @@ except ModuleNotFoundError as error:
     )
 
 
-VASP_WORKFLOW_VERSION = 7
+VASP_WORKFLOW_VERSION = 8
 VASP_MPI_TASKS = 16
 VASP_KPOINTS_DENSITY = 1464
 VASP_ENCUT_FACTOR = 1.3
@@ -490,7 +490,7 @@ def _assemble_report(material_name, symbol, lattice_structure, eos_tasks, eos_ou
     equilibrium_lattice = float(np.cbrt(volume0))
     surface_results = []
     for task in followup_tasks:
-        if task["kind"] != "surface":
+        if task["kind"] != "surface" or task["name"] not in followup_outputs:
             continue
         output = followup_outputs[task["name"]]
         forces = output["forces"]
@@ -644,12 +644,14 @@ def calculate_remote_dft_report(
                     equilibrium_lattice,
                     followup_directory,
                 )
+                elastic_tasks = [task for task in followup_tasks if task["kind"] != "surface"]
+                surface_tasks = [task for task in followup_tasks if task["kind"] == "surface"]
                 followup_outputs = _stage_phase(
                     sftp,
                     client,
                     remote_root,
-                    "followup",
-                    followup_tasks,
+                    "elastic",
+                    elastic_tasks,
                     symbol,
                     followup_directory,
                     f"dft-{symbol.lower()}-elastic",
@@ -657,7 +659,30 @@ def calculate_remote_dft_report(
                     poll_interval,
                     job_timeout,
                 )
-                return _assemble_report(
+                surface_error = None
+                if surface_tasks:
+                    try:
+                        surface_outputs = _stage_phase(
+                            sftp,
+                            client,
+                            remote_root,
+                            "surfaces",
+                            surface_tasks,
+                            symbol,
+                            followup_directory,
+                            f"dft-{symbol.lower()}-surfaces",
+                            progress,
+                            poll_interval,
+                            job_timeout,
+                        )
+                        followup_outputs.update(surface_outputs)
+                    except Exception as error:
+                        surface_error = str(error)
+                        progress(
+                            "Surface-energy calculations failed; keeping the EOS and "
+                            "elastic results."
+                        )
+                report = _assemble_report(
                     material_name,
                     symbol,
                     lattice_structure,
@@ -666,6 +691,9 @@ def calculate_remote_dft_report(
                     followup_tasks,
                     followup_outputs,
                 )
+                if surface_error:
+                    report["surface_energy_error"] = surface_error
+                return report
         finally:
             sftp.close()
     finally:
