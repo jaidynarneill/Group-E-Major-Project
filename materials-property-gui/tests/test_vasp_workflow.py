@@ -21,6 +21,7 @@ from src.dft.vasp_workflow import (
     calculate_remote_dft_report,
     _find_remote_material_directory,
     _inspect_remote_run,
+    _clear_remote_phase_folders,
 )
 from src.dft.remote_vasp import REMOTE_SCRATCH_DIRECTORY, VASP_MODULE
 from src.dft.vasp_workflow import VASP_MPI_TASKS, VASP_WORKFLOW_VERSION
@@ -62,6 +63,25 @@ class TestVaspWorkflow(unittest.TestCase):
             _find_remote_material_directory(sftp, "Aluminum"),
             f"{REMOTE_SCRATCH_DIRECTORY}/aluminum-dft",
         )
+
+    def test_surface_retry_cleanup_preserves_other_phase_folders(self):
+        sftp = Mock()
+        sftp.listdir.return_value = [
+            "bulk-relax",
+            "eos",
+            "elastic",
+            "surfaces",
+            "surfaces-resume-old",
+        ]
+        client = Mock()
+
+        with patch("src.dft.vasp_workflow._remote_command") as remote_command:
+            _clear_remote_phase_folders(client, sftp, "/shared/Aluminum-Dft", ("surfaces",))
+
+        removed_paths = [call.args[1] for call in remote_command.call_args_list]
+        self.assertEqual(len(removed_paths), 2)
+        self.assertTrue(all("surfaces" in path for path in removed_paths))
+        self.assertFalse(any("elastic" in path or "eos" in path for path in removed_paths))
 
     def test_job_poller_reports_state_without_streaming_logs(self):
         client = Mock()
@@ -415,7 +435,7 @@ class TestVaspWorkflow(unittest.TestCase):
 
         self.assertEqual(result, report)
         self.assertEqual(stage_phase.call_count, 1)
-        self.assertTrue(stage_phase.call_args.args[3].startswith("surfaces-resume-"))
+        self.assertEqual(stage_phase.call_args.args[3], "surfaces")
         self.assertEqual(stage_phase.call_args.args[2], "/shared/Aluminum-Dft")
         self.assertEqual(stage_phase.call_args.args[4], [surface_task])
         self.assertEqual(

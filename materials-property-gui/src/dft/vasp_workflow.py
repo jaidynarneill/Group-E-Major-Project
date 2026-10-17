@@ -3,7 +3,6 @@ import shlex
 import sys
 import tempfile
 import time
-import uuid
 from pathlib import Path
 
 import numpy as np
@@ -603,14 +602,20 @@ def _load_existing_phase(sftp, remote_run, phase_names, phase_name, tasks, local
     return None
 
 
-def _new_remote_phase_name(sftp, remote_root, phase_name):
+def _clear_remote_phase_folders(client, sftp, remote_root, phase_names):
     try:
         existing_names = sftp.listdir(remote_root)
     except OSError:
-        existing_names = [phase_name]
-    if phase_name not in existing_names:
-        return phase_name
-    return f"{phase_name}-retry-{uuid.uuid4().hex}"
+        return
+    for entry in existing_names:
+        if any(
+            entry == phase_name
+            or entry.startswith(f"{phase_name}-retry-")
+            or entry.startswith(f"{phase_name}-resume-")
+            for phase_name in phase_names
+        ):
+            remote_path = f"{remote_root}/{entry}"
+            _remote_command(client, f"rm -rf -- {shlex.quote(remote_path)}")
 
 
 def _load_remote_phase(sftp, remote_run, phase_name, tasks, local_phase):
@@ -818,6 +823,12 @@ def calculate_remote_dft_report(
                 _remote_command(client, f"mkdir -m 700 -p {shlex.quote(remote_material_root)}")
                 remote_root = remote_material_root
                 _remote_command(client, f"mkdir -m 700 -p {shlex.quote(remote_root)}")
+                _clear_remote_phase_folders(
+                    client,
+                    sftp,
+                    remote_root,
+                    ("bulk-relax", "eos", "elastic", "followup", "surfaces"),
+                )
             else:
                 remote_root = remote_material_root
             with tempfile.TemporaryDirectory(prefix="materials-property-") as temporary_directory:
@@ -834,7 +845,7 @@ def calculate_remote_dft_report(
                         sftp,
                         client,
                         remote_root,
-                        _new_remote_phase_name(sftp, remote_root, "bulk-relax"),
+                        "bulk-relax",
                         [relaxation_task],
                         symbol,
                         relaxation_directory,
@@ -860,7 +871,7 @@ def calculate_remote_dft_report(
                         sftp,
                         client,
                         remote_root,
-                        _new_remote_phase_name(sftp, remote_root, "eos"),
+                        "eos",
                         eos_tasks,
                         symbol,
                         eos_directory,
@@ -884,7 +895,7 @@ def calculate_remote_dft_report(
                         sftp,
                         client,
                         remote_root,
-                        _new_remote_phase_name(sftp, remote_root, "elastic"),
+                        "elastic",
                         elastic_tasks,
                         symbol,
                         followup_directory,
@@ -902,20 +913,26 @@ def calculate_remote_dft_report(
                         reusable_run["report"]["a0"],
                         followup_directory,
                     )
-                    surface_tasks = reusable_run["missing_surfaces"]
+                    surface_tasks = [
+                        task for task in followup_tasks if task["kind"] == "surface"
+                    ]
                     followup_outputs = reusable_run["followup_outputs"]
 
                 surface_error = None
                 if surface_tasks:
                     try:
-                        surface_phase = _new_remote_phase_name(sftp, remote_root, "surfaces")
-                        if reusable_run is not None and surface_phase == "surfaces":
-                            surface_phase = f"surfaces-resume-{uuid.uuid4().hex}"
+                        if reusable_run is not None:
+                            _clear_remote_phase_folders(
+                                client,
+                                sftp,
+                                remote_root,
+                                ("surfaces",),
+                            )
                         surface_outputs = _stage_phase(
                             sftp,
                             client,
                             remote_root,
-                            surface_phase,
+                            "surfaces",
                             surface_tasks,
                             symbol,
                             followup_directory,
