@@ -184,6 +184,7 @@ class TestVaspWorkflow(unittest.TestCase):
                     progress,
                     0.01,
                     60,
+                    memory="8G",
                 )
 
         self.assertEqual(result, {"eos_00": {"energy": -1.25}})
@@ -196,6 +197,7 @@ class TestVaspWorkflow(unittest.TestCase):
         wait_for_job.assert_called_once_with(client, "/scratch/job/eos", "98765", progress, 0.01, 60)
         read_result.assert_called_once_with(task_directory / "OUTCAR")
         self.assertIn("sbatch --parsable", remote_command.call_args_list[-1].args[1])
+        self.assertIn("--mem=8G", remote_command.call_args_list[-1].args[1])
 
     def test_na_bcc_task_generation_writes_full_report_inputs(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -337,6 +339,8 @@ class TestVaspWorkflow(unittest.TestCase):
             [call.args[3] for call in stage_phase.call_args_list],
             ["bulk-relax", "eos", "elastic", "surfaces"],
         )
+        self.assertNotIn("memory", stage_phase.call_args_list[2].kwargs)
+        self.assertEqual(stage_phase.call_args_list[3].kwargs["memory"], "8G")
         self.assertEqual(assemble_report.call_args.args[-1], elastic_outputs)
         self.assertEqual(result["elastic_data"], report["elastic_data"])
         self.assertEqual(result["surface_energy_data"]["surfaces"], [])

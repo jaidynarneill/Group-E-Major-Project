@@ -63,6 +63,7 @@ VASP_SURFACE_LAYERS = 8
 VASP_SURFACE_VACUUM = 10.0
 VASP_SURFACE_FMAX = 0.05
 VASP_SURFACE_MAX_STEPS = 200
+VASP_SURFACE_MEMORY = "8G"
 VASP_CACHE_BACKEND = (
     "VASP",
     VASP_MODULE,
@@ -336,7 +337,21 @@ def _validate_remote_environment(client, symbol):
     return output
 
 
-def _stage_phase(sftp, client, remote_root, phase_name, tasks, symbol, local_phase, job_name, progress, poll_interval, job_timeout):
+def _stage_phase(
+    sftp,
+    client,
+    remote_root,
+    phase_name,
+    tasks,
+    symbol,
+    local_phase,
+    job_name,
+    progress,
+    poll_interval,
+    job_timeout,
+    *,
+    memory=None,
+):
     remote_phase = f"{remote_root}/{phase_name}"
     _remote_command(client, f"mkdir -m 700 -p {shlex.quote(remote_phase)}")
     _remote_command(client, f"mkdir -m 700 -p {shlex.quote(remote_phase + '/tasks')}")
@@ -356,8 +371,9 @@ def _stage_phase(sftp, client, remote_root, phase_name, tasks, symbol, local_pha
         output_directories[task["name"]] = local_task / "OUTCAR"
 
     progress(f"Submitting {phase_name} VASP tasks to Slurm...")
+    memory_option = f"--mem={shlex.quote(memory)} " if memory else ""
     submit_command = (
-        f"cd {shlex.quote(remote_phase)} && sbatch --parsable "
+        f"cd {shlex.quote(remote_phase)} && sbatch --parsable {memory_option}"
         f"--job-name={shlex.quote(job_name)} run.sh"
     )
     submit_output, _, _ = _remote_command(client, submit_command, timeout=60)
@@ -907,6 +923,7 @@ def calculate_remote_dft_report(
                             progress,
                             poll_interval,
                             job_timeout,
+                            memory=VASP_SURFACE_MEMORY,
                         )
                         followup_outputs.update(surface_outputs)
                     except Exception as error:
