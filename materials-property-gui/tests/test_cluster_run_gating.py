@@ -2,6 +2,7 @@ import unittest
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
 
+from src.analysis.elastic_properties import MEAM_CATALOG
 from src.ui.plot_panel import (
     CalculationWorker,
     PlotPanel,
@@ -19,14 +20,25 @@ from src.ui.cluster_connection_dialog import (
 
 
 class TestClusterRunGating(unittest.TestCase):
-    def test_periodic_table_materials_keep_all_methods_selectable(self):
-        self.assertGreaterEqual(len(PlotPanel.MATERIALS), 118)
-        self.assertIn("Cobalt", PlotPanel.MATERIALS)
-        self.assertIn("Oganesson", PlotPanel.MATERIALS)
-        self.assertNotIn("Og", PlotPanel.MATERIALS)
+    def test_dropdown_lists_only_materials_with_meam_records(self):
+        self.assertEqual(
+            PlotPanel.MATERIALS,
+            list(dict.fromkeys(record["name"] for record in MEAM_CATALOG.values())),
+        )
+        self.assertIn("Aluminum", PlotPanel.MATERIALS)
+        self.assertNotIn("Cobalt", PlotPanel.MATERIALS)
+        self.assertNotIn("Oganesson", PlotPanel.MATERIALS)
         self.assertIn("MEAM", PlotPanel.METHODS)
         self.assertIn("DFT", PlotPanel.METHODS)
         self.assertIn("MACE-MP Small", PlotPanel.METHODS)
+
+    def test_lattice_defaults_follow_material_and_meam_structure(self):
+        self.assertEqual(PlotPanel.lattices_for_method("Aluminum", "MEAM"), ["FCC"])
+        self.assertEqual(
+            PlotPanel.lattices_for_method("Aluminum", "DFT"),
+            PlotPanel.LATTICES["Aluminum"],
+        )
+        self.assertEqual(PlotPanel.default_lattice_for_material("Silicon"), "Diamond cubic")
 
     def test_meam_incompatibility_is_reported_without_hiding_the_method(self):
         errors = configuration_compatibility_errors([(1, "Cobalt", "FCC", "MEAM")])

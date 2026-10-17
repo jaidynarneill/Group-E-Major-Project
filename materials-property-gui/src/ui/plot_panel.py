@@ -60,10 +60,8 @@ except ModuleNotFoundError as error:
     from src.analysis.result_cache import CalculationResultCache
     from src.ui.cluster_connection_dialog import ClusterConnectionDialog
 
-from ase.data import atomic_names as ASE_ATOMIC_NAMES
 from ase.data import chemical_symbols as ASE_CHEMICAL_SYMBOLS
 from ase.data import reference_states as ASE_REFERENCE_STATES
-
 
 CUBIC_LATTICE_OPTIONS = ["FCC", "BCC", "Diamond cubic", "Simple cubic"]
 ASE_SYMMETRY_LATTICES = {
@@ -255,11 +253,7 @@ class PlotPanel(QWidget):
     themeChanged = pyqtSignal(bool)
 
     MATERIALS = list(dict.fromkeys(
-        [record["name"] for record in MEAM_CATALOG.values()]
-        + [
-            ELEMENT_NAMES.get(symbol, ASE_ATOMIC_NAMES[atomic_number] or symbol)
-            for atomic_number, symbol in enumerate(ASE_CHEMICAL_SYMBOLS[1:], start=1)
-        ]
+        record["name"] for record in MEAM_CATALOG.values()
     ))
     METHODS = [*MACE_MODEL_OPTIONS, "MEAM", "DFT"]
     LATTICES = {material: CUBIC_LATTICE_OPTIONS for material in MATERIALS}
@@ -314,17 +308,19 @@ class PlotPanel(QWidget):
             enabled = QCheckBox()
             enabled.setChecked(index == 0)
 
+            method = QComboBox()
+            method.addItems(self.METHODS)
+
             material = QComboBox()
             material.addItems(self.MATERIALS)
             if index < len(self.DEFAULT_MATERIALS):
                 material.setCurrentText(self.DEFAULT_MATERIALS[index])
 
             lattice = QComboBox()
-            lattice.addItems(self.LATTICES[material.currentText()])
-            lattice.setCurrentText(self.default_lattice_for_material(material.currentText()))
-
-            method = QComboBox()
-            method.addItems(self.METHODS)
+            lattice_options = self.lattices_for_method(material.currentText(), method.currentText())
+            lattice.addItems(lattice_options)
+            default_lattice = self.default_lattice_for_material(material.currentText())
+            lattice.setCurrentText(default_lattice if default_lattice in lattice_options else lattice_options[0])
 
             grid.addWidget(enabled, index + 1, 0)
             grid.addWidget(QLabel(f"Run {index + 1}"), index + 1, 1)
@@ -337,7 +333,16 @@ class PlotPanel(QWidget):
                     [widget.setEnabled(checked) for widget in widgets]
             )
             material.currentTextChanged.connect(
-                lambda value, dropdown=lattice: self.update_lattices(dropdown, value)
+                lambda value, dropdown=lattice, method_dropdown=method:
+                    self.update_lattices(dropdown, value, method_dropdown.currentText())
+            )
+            method.currentTextChanged.connect(
+                lambda value, material_dropdown=material, lattice_dropdown=lattice:
+                    self.update_lattices(
+                        lattice_dropdown,
+                        material_dropdown.currentText(),
+                        value,
+                    )
             )
 
             if index != 0:
@@ -479,15 +484,25 @@ class PlotPanel(QWidget):
             self.show_empty_plots()
         self.themeChanged.emit(dark)
 
-    def update_lattices(self, dropdown, material):
-        previous_value = dropdown.currentText()
-        options = self.LATTICES[material]
+    @staticmethod
+    def lattices_for_method(material, method):
+        if str(method).strip().upper() == "MEAM":
+            _, symbol = _normalize_material(material)
+            record = MEAM_CATALOG.get(symbol)
+            return [record["lattice_name"]] if record is not None else []
+        return PlotPanel.LATTICES.get(material, CUBIC_LATTICE_OPTIONS)
+
+    def update_lattices(self, dropdown, material, method):
+        options = self.lattices_for_method(material, method)
 
         dropdown.clear()
         dropdown.addItems(options)
 
-        if previous_value in options:
-            dropdown.setCurrentText(previous_value)
+        recommended_lattice = self.default_lattice_for_material(material)
+        if recommended_lattice in options:
+            dropdown.setCurrentText(recommended_lattice)
+        elif options:
+            dropdown.setCurrentText(options[0])
 
     @staticmethod
     def default_lattice_for_material(material):
