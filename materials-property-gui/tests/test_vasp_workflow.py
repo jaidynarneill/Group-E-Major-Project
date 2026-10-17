@@ -112,6 +112,12 @@ class TestVaspWorkflow(unittest.TestCase):
         self.assertIn("/scratch/job/eos/slurm-*-98765.err", command)
         self.assertIn("tail -n 12", command)
 
+    def test_vasp_launcher_suppresses_slurm_stdout_and_stderr_files(self):
+        launcher = Path("src/dft/run.sh").read_text(encoding="utf-8")
+
+        self.assertIn("#SBATCH --output=/dev/null", launcher)
+        self.assertIn("#SBATCH --error=/dev/null", launcher)
+
     def test_cobalt_relaxation_and_eos_inputs_use_logical_settings(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -143,20 +149,24 @@ class TestVaspWorkflow(unittest.TestCase):
         self.assertNotIn("EDIFFG", eos_incar)
         self.assertAlmostEqual(eos_tasks[0]["lattice_parameter"], 3.5133144702592642 * 0.97)
 
-    def test_aluminum_surface_relaxation_uses_same_projector_mode_as_working_shear(self):
+    def test_aluminum_surface_uses_real_space_projection_without_changing_elastic_tasks(self):
         with tempfile.TemporaryDirectory() as directory:
             tasks = build_followup_tasks("Al", "fcc", 4.05, directory)
             surface_directory = Path(directory) / "surface_100"
             incar = (surface_directory / "INCAR.template").read_text(encoding="ascii")
             kpoints = (surface_directory / "KPOINTS").read_text(encoding="ascii")
+            normal_incar = (Path(directory) / "normal_00" / "INCAR.template").read_text(encoding="ascii")
+            shear_incar = (Path(directory) / "shear_00" / "INCAR.template").read_text(encoding="ascii")
 
         surface_task = next(task for task in tasks if task["name"] == "surface_100")
         self.assertEqual(surface_task["atom_count"], 32)
-        self.assertIn("LREAL = .FALSE.", incar)
+        self.assertIn("LREAL = Auto", incar)
         self.assertIn("AMIN = 0.01", incar)
         self.assertIn("KPAR = 4", incar)
         self.assertIn("ISIF = 2", incar)
         self.assertIn("Gamma\n8 8 1\n", kpoints)
+        self.assertIn("LREAL = .FALSE.", normal_incar)
+        self.assertIn("LREAL = .FALSE.", shear_incar)
 
     def test_remote_preflight_requires_vasp_and_potgen(self):
         with patch(

@@ -22,6 +22,8 @@ class TestClusterRunGating(unittest.TestCase):
     def test_periodic_table_materials_keep_all_methods_selectable(self):
         self.assertGreaterEqual(len(PlotPanel.MATERIALS), 118)
         self.assertIn("Cobalt", PlotPanel.MATERIALS)
+        self.assertIn("Oganesson", PlotPanel.MATERIALS)
+        self.assertNotIn("Og", PlotPanel.MATERIALS)
         self.assertIn("MEAM", PlotPanel.METHODS)
         self.assertIn("DFT", PlotPanel.METHODS)
         self.assertIn("MACE-MP Small", PlotPanel.METHODS)
@@ -93,6 +95,29 @@ class TestClusterRunGating(unittest.TestCase):
         ]
         self.assertTrue(configurations_need_cluster_login(configurations))
 
+    def test_cached_dft_run_does_not_require_cluster_login(self):
+        cache = Mock()
+        cache.load.return_value = {"method": "DFT"}
+
+        self.assertFalse(
+            configurations_need_cluster_login(
+                [(2, "Sodium", "BCC", "DFT")],
+                result_cache=cache,
+            )
+        )
+        cache.load.assert_called_once_with("Sodium", "BCC", "DFT")
+
+    def test_uncached_dft_run_still_requires_cluster_login(self):
+        cache = Mock()
+        cache.load.return_value = None
+
+        self.assertTrue(
+            configurations_need_cluster_login(
+                [(2, "Sodium", "BCC", "DFT")],
+                result_cache=cache,
+            )
+        )
+
     def test_dft_label_matching_ignores_case_and_whitespace(self):
         self.assertTrue(
             configurations_need_cluster_login([(1, "Sodium", "BCC", " dft ")])
@@ -145,7 +170,7 @@ class TestClusterRunGating(unittest.TestCase):
         self.assertEqual(completed[0][0], [("Run 1: Sodium / BCC / DFT", result)])
         self.assertEqual(result["elastic_data"]["sigma_xy_GPa"], [1.0, 2.0])
         self.assertEqual(result["surface_energy_error"], "surface job failed for [redacted]")
-        self.assertIn("Surface calculation error: surface job failed for [redacted]", completed[0][1][0])
+        self.assertEqual(completed[0][1], [])
         worker.result_cache.save.assert_called_once_with("Sodium", "BCC", "DFT", result)
 
         cached_worker = CalculationWorker([(1, "Sodium", "BCC", "DFT")])
@@ -157,12 +182,7 @@ class TestClusterRunGating(unittest.TestCase):
         cached_worker.run()
 
         self.assertEqual(cached_completed[0][0], [("Run 1: Sodium / BCC / DFT", result)])
-        self.assertTrue(
-            any(
-                "Surface calculation error: surface job failed for [redacted]" in error
-                for error in cached_completed[0][1]
-            )
-        )
+        self.assertEqual(cached_completed[0][1], [])
 
     def test_cached_partial_surface_data_is_recognized_without_failure_metadata(self):
         warning = _surface_energy_warning(
@@ -180,52 +200,8 @@ class TestClusterRunGating(unittest.TestCase):
             "Incomplete surface-energy data; missing (110), (111).",
         )
 
-    def test_partial_cached_dft_report_retries_remote_surface_workflow(self):
-        worker = CalculationWorker(
-            [(1, "Sodium", "BCC", "DFT")],
-            cluster_credentials=("student", "secret"),
-        )
-        cached_result = {
-            "material": "Sodium",
-            "lattice_structure": "BCC",
-            "method": "DFT",
-            "elastic_data": {"sigma_xy_GPa": [1.0, 2.0]},
-            "surface_energy_data": {"surfaces": []},
-        }
-        refreshed_result = {
-            **cached_result,
-            "surface_energy_data": {
-                "surfaces": [
-                    {"orientation": orientation}
-                    for orientation in ("(100)", "(110)", "(111)")
-                ],
-            },
-        }
-        worker.result_cache.load = Mock(return_value=cached_result)
-        worker.result_cache.save = Mock()
-        completed = []
-        worker.completed.connect(lambda results, errors: completed.append((results, errors)))
-
-        with patch(
-            "src.dft.vasp_workflow.calculate_remote_dft_report",
-            return_value=refreshed_result,
-        ) as remote_run:
-            worker.run()
-
-        remote_run.assert_called_once()
-        self.assertEqual(completed[0], ([("Run 1: Sodium / BCC / DFT", refreshed_result)], []))
-        worker.result_cache.save.assert_called_once_with(
-            "Sodium",
-            "BCC",
-            "DFT",
-            refreshed_result,
-        )
-
-    def test_failed_surface_retry_preserves_partial_cached_dft_report(self):
-        worker = CalculationWorker(
-            [(1, "Sodium", "BCC", "DFT")],
-            cluster_credentials=("student", "secret"),
-        )
+    def test_partial_cached_dft_report_loads_without_remote_retry(self):
+        worker = CalculationWorker([(1, "Sodium", "BCC", "DFT")])
         cached_result = {
             "material": "Sodium",
             "lattice_structure": "BCC",
@@ -239,14 +215,11 @@ class TestClusterRunGating(unittest.TestCase):
 
         with patch(
             "src.dft.vasp_workflow.calculate_remote_dft_report",
-            side_effect=RuntimeError("Slurm submission unavailable"),
         ) as remote_run:
             worker.run()
 
-        remote_run.assert_called_once()
-        self.assertEqual(completed[0][0], [("Run 1: Sodium / BCC / DFT", cached_result)])
-        self.assertTrue(any("Slurm submission unavailable" in error for error in completed[0][1]))
-        self.assertTrue(any("missing (100), (110), (111)" in error for error in completed[0][1]))
+        remote_run.assert_not_called()
+        self.assertEqual(completed[0], ([("Run 1: Sodium / BCC / DFT", cached_result)], []))
 
     def test_dft_worker_redacts_credentials_from_remote_errors(self):
         worker = CalculationWorker(

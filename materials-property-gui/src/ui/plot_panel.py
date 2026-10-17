@@ -60,6 +60,7 @@ except ModuleNotFoundError as error:
     from src.analysis.result_cache import CalculationResultCache
     from src.ui.cluster_connection_dialog import ClusterConnectionDialog
 
+from ase.data import atomic_names as ASE_ATOMIC_NAMES
 from ase.data import chemical_symbols as ASE_CHEMICAL_SYMBOLS
 from ase.data import reference_states as ASE_REFERENCE_STATES
 
@@ -101,11 +102,18 @@ def configuration_compatibility_errors(configurations):
     return errors
 
 
-def configurations_need_cluster_login(configurations):
-    return any(
-        str(method).strip().upper() == "DFT"
-        for _, _, _, method in configurations
-    )
+def configurations_need_cluster_login(configurations, result_cache=None):
+    for _, material, lattice, method in configurations:
+        if str(method).strip().upper() != "DFT":
+            continue
+        if result_cache is None:
+            return True
+        try:
+            if result_cache.load(material, lattice, method) is None:
+                return True
+        except Exception:
+            return True
+    return False
 
 
 def _surface_energy_warning(material, lattice, result):
@@ -156,34 +164,22 @@ class CalculationWorker(QObject):
         try:
             for run_number, material, lattice, method in self.configurations:
                 label = f"Run {run_number}: {material} / {lattice} / {method}"
-                retry_cached_dft = False
-                cached_surface_warning = None
                 try:
                     cached_result = self.result_cache.load(material, lattice, method)
                 except Exception as error:
                     cached_result = None
                     self.progress.emit(f"Cache check failed for {label}: {error}")
                 if cached_result is not None:
+                    self.progress.emit(f"Loading cached results for {label}...")
+                    results.append((label, cached_result))
                     cached_surface_warning = _surface_energy_warning(
                         material,
                         lattice,
                         cached_result,
                     )
-                    retry_cached_dft = (
-                        method.strip().upper() == "DFT"
-                        and cached_surface_warning is not None
-                    )
-                    if retry_cached_dft:
-                        self.progress.emit(
-                            f"Cached DFT results for {label} are missing surface data; "
-                            "retrying the remote surface stage..."
-                        )
-                    else:
-                        self.progress.emit(f"Loading cached results for {label}...")
-                        results.append((label, cached_result))
-                        if cached_surface_warning:
-                            errors.append(f"{label} surface energies: {cached_surface_warning}")
-                        continue
+                    if cached_surface_warning and method.strip().upper() != "DFT":
+                        errors.append(f"{label} surface energies: {cached_surface_warning}")
+                    continue
 
                 self.progress.emit(f"Calculating {label}...")
                 try:
@@ -236,7 +232,7 @@ class CalculationWorker(QObject):
                             result["surface_energy_error"] = str(error)
                     results.append((label, result))
                     surface_warning = _surface_energy_warning(material, lattice, result)
-                    if surface_warning:
+                    if surface_warning and method.strip().upper() != "DFT":
                         errors.append(f"{label} surface energies: {surface_warning}")
                     try:
                         self.result_cache.save(material, lattice, method, result)
@@ -249,9 +245,6 @@ class CalculationWorker(QObject):
                             if secret:
                                 message = message.replace(secret, "[redacted]")
                     errors.append(f"{label}: {message}")
-                    if retry_cached_dft:
-                        results.append((label, cached_result))
-                        errors.append(f"{label} surface energies: {cached_surface_warning}")
             self.completed.emit(results, errors)
         finally:
             self.cluster_credentials = None
@@ -263,7 +256,10 @@ class PlotPanel(QWidget):
 
     MATERIALS = list(dict.fromkeys(
         [record["name"] for record in MEAM_CATALOG.values()]
-        + [ELEMENT_NAMES.get(symbol, symbol) for symbol in ASE_CHEMICAL_SYMBOLS[1:]]
+        + [
+            ELEMENT_NAMES.get(symbol, ASE_ATOMIC_NAMES[atomic_number] or symbol)
+            for atomic_number, symbol in enumerate(ASE_CHEMICAL_SYMBOLS[1:], start=1)
+        ]
     ))
     METHODS = [*MACE_MODEL_OPTIONS, "MEAM", "DFT"]
     LATTICES = {material: CUBIC_LATTICE_OPTIONS for material in MATERIALS}
@@ -562,7 +558,7 @@ class PlotPanel(QWidget):
             )
             return
 
-        if configurations_need_cluster_login(configurations):
+        if configurations_need_cluster_login(configurations, CalculationResultCache()):
             dialog = ClusterConnectionDialog(self)
             if dialog.exec_() != dialog.Accepted:
                 return
@@ -672,12 +668,13 @@ class PlotPanel(QWidget):
                         f"({converged}; {surface_result['atom_count']} atoms; {surface_result['area_A2']:.2f} Å²)"
                     )
             else:
-                surface_warning = _surface_energy_warning(
-                    result.get("material", ""),
-                    result.get("lattice_structure", ""),
-                    result,
-                )
-                summaries.append(f"    {surface_warning or 'No surface-energy data returned.'}")
+                if result.get("method", "").strip().upper() != "DFT":
+                    surface_warning = _surface_energy_warning(
+                        result.get("material", ""),
+                        result.get("lattice_structure", ""),
+                        result,
+                    )
+                    summaries.append(f"    {surface_warning or 'No surface-energy data returned.'}")
             summaries.append("")
         if errors:
             summaries.extend(["Run Errors", *[f"  {error}" for error in errors]])

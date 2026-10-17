@@ -113,7 +113,7 @@ def _kpoint_mesh(atoms):
     return tuple(np.maximum(1, np.rint(scaled_mesh).astype(int)))
 
 
-def _write_vasp_task(directory, atoms, *, relax=False, relax_cell=False):
+def _write_vasp_task(directory, atoms, *, relax=False, relax_cell=False, lreal=None):
     from ase.io import write
 
     directory = Path(directory)
@@ -132,7 +132,7 @@ def _write_vasp_task(directory, atoms, *, relax=False, relax_cell=False):
         "EDIFF = 2E-4" if relax else "EDIFF = 1E-8",
         "ISMEAR = 0",
         "SIGMA = 0.05",
-        "LREAL = Auto" if relax_cell else "LREAL = .FALSE.",
+        f"LREAL = {lreal}" if lreal is not None else "LREAL = Auto" if relax_cell else "LREAL = .FALSE.",
         "LASPH = .TRUE.",
         "ISYM = 0",
         f"ISIF = {3 if relax_cell else 2}",
@@ -229,7 +229,7 @@ def build_followup_tasks(symbol, crystal_structure, equilibrium_lattice, directo
         )
         slab.pbc = (True, True, True)
         name = "surface_" + "".join(str(index) for index in indices)
-        _write_vasp_task(directory / name, slab, relax=True)
+        _write_vasp_task(directory / name, slab, relax=True, lreal="Auto")
         tasks.append({
             "name": name,
             "kind": "surface",
@@ -478,6 +478,47 @@ def _wait_for_job(client, remote_phase, job_id, progress, poll_interval, job_tim
     )
 
 
+def _assemble_surface_energy_data(
+    material_name,
+    symbol,
+    lattice_structure,
+    bulk_energy_per_atom,
+    surface_tasks,
+    surface_outputs,
+):
+    surface_results = []
+    for task in surface_tasks:
+        if task["name"] not in surface_outputs:
+            continue
+        output = surface_outputs[task["name"]]
+        forces = output["forces"]
+        converged = bool(
+            forces is not None
+            and len(forces)
+            and np.max(np.linalg.norm(forces, axis=1)) <= VASP_SURFACE_FMAX
+        )
+        surface_results.append({
+            "orientation": task["orientation"],
+            "miller_indices": task["miller_indices"],
+            "energy_eV_A2": float(
+                (output["energy"] - task["atom_count"] * bulk_energy_per_atom)
+                / (2.0 * task["area_A2"])
+            ),
+            "slab_energy_eV": output["energy"],
+            "bulk_energy_per_atom_eV": float(bulk_energy_per_atom),
+            "atom_count": task["atom_count"],
+            "area_A2": task["area_A2"],
+            "converged": converged,
+        })
+    return {
+        "material": material_name,
+        "symbol": symbol,
+        "lattice_structure": lattice_structure,
+        "method": "DFT",
+        "surfaces": surface_results,
+    }
+
+
 def _assemble_report(material_name, symbol, lattice_structure, eos_tasks, eos_outputs, followup_tasks, followup_outputs):
     from ase.build import bulk
 
@@ -510,30 +551,14 @@ def _assemble_report(material_name, symbol, lattice_structure, eos_tasks, eos_ou
     c11, c12, c44 = (fit[0] * EV_A3_TO_GPA for fit in (c11_fit, c12_fit, c44_fit))
     derived = derive_cubic_properties(c11, c12, c44)
     equilibrium_lattice = float(np.cbrt(volume0))
-    surface_results = []
-    for task in followup_tasks:
-        if task["kind"] != "surface" or task["name"] not in followup_outputs:
-            continue
-        output = followup_outputs[task["name"]]
-        forces = output["forces"]
-        converged = bool(
-            forces is not None
-            and len(forces)
-            and np.max(np.linalg.norm(forces, axis=1)) <= VASP_SURFACE_FMAX
-        )
-        surface_results.append({
-            "orientation": task["orientation"],
-            "miller_indices": task["miller_indices"],
-            "energy_eV_A2": float(
-                (output["energy"] - task["atom_count"] * energy0 / atom_count)
-                / (2.0 * task["area_A2"])
-            ),
-            "slab_energy_eV": output["energy"],
-            "bulk_energy_per_atom_eV": float(energy0 / atom_count),
-            "atom_count": task["atom_count"],
-            "area_A2": task["area_A2"],
-            "converged": converged,
-        })
+    surface_energy_data = _assemble_surface_energy_data(
+        material_name,
+        symbol,
+        lattice_structure,
+        float(energy0 / atom_count),
+        [task for task in followup_tasks if task["kind"] == "surface"],
+        followup_outputs,
+    )
 
     return {
         "material": material_name,
@@ -565,13 +590,7 @@ def _assemble_report(material_name, symbol, lattice_structure, eos_tasks, eos_ou
             "sigma_yy_GPa": sigma_yy * EV_A3_TO_GPA,
             "sigma_xy_GPa": sigma_xy * EV_A3_TO_GPA,
         },
-        "surface_energy_data": {
-            "material": material_name,
-            "symbol": symbol,
-            "lattice_structure": lattice_structure,
-            "method": "DFT",
-            "surfaces": surface_results,
-        },
+        "surface_energy_data": surface_energy_data,
     }
 
 

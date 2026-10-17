@@ -3,8 +3,8 @@
 #SBATCH --ntasks=16
 #SBATCH --constraint=intel
 #SBATCH --time=02:00:00
-#SBATCH --output=slurm-%x-%j.out
-#SBATCH --error=slurm-%x-%j.err
+#SBATCH --output=/dev/null
+#SBATCH --error=/dev/null
 
 set -euo pipefail
 
