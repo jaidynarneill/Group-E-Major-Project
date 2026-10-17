@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import QObject, QThread, Qt, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QColor, QPalette
+from matplotlib import cm, colors
 from matplotlib import rcParams
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -34,6 +35,7 @@ try:
         birch_murnaghan,
         create_calculator,
         compute_elastic_properties,
+        cubic_youngs_modulus,
         mace_model_for_method,
     )
     from analysis.surface_energy import SURFACE_ORIENTATIONS, compute_surface_energies
@@ -54,6 +56,7 @@ except ModuleNotFoundError as error:
         birch_murnaghan,
         create_calculator,
         compute_elastic_properties,
+        cubic_youngs_modulus,
         mace_model_for_method,
     )
     from src.analysis.surface_energy import SURFACE_ORIENTATIONS, compute_surface_energies
@@ -376,9 +379,9 @@ class PlotPanel(QWidget):
         self.result_output.setMinimumHeight(120)
         self.result_output.setStyleSheet("QPlainTextEdit { font-size: 18px; }")
 
-        self.figure = Figure(figsize=(13, 23), facecolor="#1e1e1e")
+        self.figure = Figure(figsize=(13, 26), facecolor="#1e1e1e")
         self.canvas = FigureCanvas(self.figure)
-        self.canvas.setMinimumSize(1300, 2300)
+        self.canvas.setMinimumSize(1300, 2600)
         self.output_scroll = QScrollArea()
         self.output_scroll.setWidgetResizable(True)
         self.output_scroll.setMinimumHeight(250)
@@ -525,10 +528,12 @@ class PlotPanel(QWidget):
             "Stress-Strain Response",
             "Elastic Constants",
             "Surface Energies",
+            "Elastic Anisotropy",
+            "3D Crystal Unit Cells",
         ]
 
         for index, title in enumerate(plot_titles, start=1):
-            ax = self.figure.add_subplot(2, 2, index)
+            ax = self.figure.add_subplot(3, 2, index)
             ax.set_facecolor(colors["surface"])
             ax.set_title(title, color=colors["text"])
             ax.tick_params(colors=colors["secondary_text"])
@@ -544,7 +549,7 @@ class PlotPanel(QWidget):
             )
 
         self.figure.subplots_adjust(
-            left=0.16, right=0.98, bottom=0.17, top=0.90, wspace=0.38, hspace=0.52
+            left=0.10, right=0.98, bottom=0.10, top=0.92, wspace=0.34, hspace=0.42
         )
         self.canvas.draw()
 
@@ -619,6 +624,8 @@ class PlotPanel(QWidget):
         self._plot_stress_strain(results)
         self._plot_elastic_constants(results)
         self._plot_surface_energies(results)
+        self._plot_elastic_anisotropy(results)
+        self._plot_unit_cells(results)
         summaries = []
         for label, result in results:
             run_name = label.split(":", 1)[0]
@@ -698,13 +705,13 @@ class PlotPanel(QWidget):
         self.result_output.setPlainText(report)
         print(report)
         self.figure.subplots_adjust(
-            left=0.13, right=0.98, bottom=0.12, top=0.96, wspace=0.32, hspace=0.40
+            left=0.08, right=0.98, bottom=0.08, top=0.96, wspace=0.34, hspace=0.42
         )
         self.canvas.draw()
 
-    def _new_axis(self, position, title, xlabel, ylabel):
+    def _new_axis(self, position, title, xlabel, ylabel, *, projection=None):
         colors = self.theme_colors
-        axis = self.figure.add_subplot(2, 2, position)
+        axis = self.figure.add_subplot(3, 2, position, projection=projection)
         axis.set_facecolor(colors["surface"])
         axis.set_title(title, color=colors["text"])
         axis.set_xlabel(xlabel, color=colors["secondary_text"])
@@ -824,3 +831,184 @@ class PlotPanel(QWidget):
             axis.bar(positions + offset, values, width=width, label=label)
         axis.set_xticks(positions, orientations)
         axis.legend(fontsize=10)
+
+    def _plot_elastic_anisotropy(self, results):
+        axis = self._new_axis(
+            5,
+            "Directional Young's Modulus",
+            "Configuration",
+            "",
+            projection="3d",
+        )
+        axis.set_zlabel("", color=self.theme_colors["secondary_text"])
+        theta = np.linspace(0.0, np.pi, 36)
+        phi = np.linspace(0.0, 2.0 * np.pi, 72)
+        phi_grid, theta_grid = np.meshgrid(phi, theta)
+        directions = np.stack((
+            np.sin(theta_grid) * np.cos(phi_grid),
+            np.sin(theta_grid) * np.sin(phi_grid),
+            np.cos(theta_grid),
+        ), axis=-1)
+
+        surfaces = []
+        for label, result in results:
+            try:
+                modulus = cubic_youngs_modulus(
+                    result["C11"],
+                    result["C12"],
+                    result["C44"],
+                    directions,
+                )
+            except (KeyError, ValueError):
+                continue
+            surfaces.append((label, modulus))
+
+        if not surfaces:
+            axis.text2D(
+                0.5,
+                0.5,
+                "No mechanically stable elastic tensors available",
+                color=self.theme_colors["muted_text"],
+                ha="center",
+                va="center",
+                transform=axis.transAxes,
+            )
+            return
+
+        minimum = min(float(modulus.min()) for _, modulus in surfaces)
+        maximum = max(float(modulus.max()) for _, modulus in surfaces)
+        if np.isclose(minimum, maximum):
+            maximum = minimum + 1.0
+        normalization = colors.Normalize(vmin=minimum, vmax=maximum)
+        for index, (label, modulus) in enumerate(surfaces):
+            radius = 0.52 * modulus / maximum
+            offset = index * 1.65
+            x = offset + 0.5 + radius * directions[:, :, 0]
+            y = radius * directions[:, :, 1]
+            z = radius * directions[:, :, 2]
+            axis.plot_surface(
+                x,
+                y,
+                z,
+                facecolors=cm.viridis(normalization(modulus)),
+                linewidth=0,
+                antialiased=True,
+                shade=False,
+                alpha=0.92,
+            )
+            axis.text(
+                offset + 0.5,
+                0.0,
+                0.68,
+                f"{label.split(':', 1)[0]} - {label.split(':', 1)[-1].split('/')[0].strip()}",
+                color=self.theme_colors["text"],
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+
+        axis.set_xlim(-0.25, max(0.9, (len(surfaces) - 1) * 1.65 + 1.25))
+        axis.set_ylim(-0.75, 0.75)
+        axis.set_zlim(-0.75, 0.85)
+        axis.set_xticks([])
+        axis.set_yticks([])
+        axis.set_zticks([])
+        axis.set_box_aspect((max(1.6, len(surfaces) * 1.65), 1.5, 1.5))
+        scalar_map = cm.ScalarMappable(norm=normalization, cmap="viridis")
+        scalar_map.set_array([])
+        colorbar = self.figure.colorbar(scalar_map, ax=axis, shrink=0.62, pad=0.04)
+        colorbar.set_label("Young's modulus (GPa)", color=self.theme_colors["secondary_text"])
+        colorbar.ax.tick_params(colors=self.theme_colors["secondary_text"])
+
+    def _plot_unit_cells(self, results):
+        from ase.build import bulk as build_bulk
+        from ase.data import covalent_radii
+
+        axis = self._new_axis(
+            6,
+            "3D Crystal Unit Cells",
+            "Configuration",
+            "Fractional coordinates",
+            projection="3d",
+        )
+        axis.set_zlabel("Fractional coordinates", color=self.theme_colors["secondary_text"])
+        rendered = 0
+        for index, (label, result) in enumerate(results):
+            try:
+                atoms = build_bulk(
+                    result["symbol"],
+                    _normalize_structure(result["lattice_structure"]),
+                    a=float(result["a0"]),
+                    cubic=True,
+                )
+                fractional_positions = atoms.get_scaled_positions(wrap=True)
+            except (KeyError, TypeError, ValueError):
+                continue
+
+            offset = rendered * 1.7
+            cell_color = f"C{index % 10}"
+            for first, second in ((0, 0), (0, 1), (1, 0), (1, 1)):
+                axis.plot(
+                    [offset, offset + 1.0],
+                    [first, first],
+                    [second, second],
+                    color=self.theme_colors["border"],
+                    linewidth=0.8,
+                )
+                axis.plot(
+                    [offset + first, offset + first],
+                    [0.0, 1.0],
+                    [second, second],
+                    color=self.theme_colors["border"],
+                    linewidth=0.8,
+                )
+                axis.plot(
+                    [offset + first, offset + first],
+                    [second, second],
+                    [0.0, 1.0],
+                    color=self.theme_colors["border"],
+                    linewidth=0.8,
+                )
+            atomic_number = ASE_CHEMICAL_SYMBOLS.index(result["symbol"])
+            radius = covalent_radii[atomic_number]
+            axis.scatter(
+                fractional_positions[:, 0] + offset,
+                fractional_positions[:, 1],
+                fractional_positions[:, 2],
+                s=max(100.0, (95.0 * radius) ** 2),
+                color=cell_color,
+                edgecolors=self.theme_colors["text"],
+                linewidths=0.7,
+                depthshade=True,
+            )
+            axis.text(
+                offset + 0.5,
+                0.5,
+                1.16,
+                f"{label.split(':', 1)[0]}: {result['symbol']}",
+                color=self.theme_colors["text"],
+                ha="center",
+                va="bottom",
+                fontsize=9,
+            )
+            rendered += 1
+
+        if rendered == 0:
+            axis.text2D(
+                0.5,
+                0.5,
+                "No crystal structures available",
+                color=self.theme_colors["muted_text"],
+                ha="center",
+                va="center",
+                transform=axis.transAxes,
+            )
+            return
+        axis.set_xlim(-0.2, (rendered - 1) * 1.7 + 1.2)
+        axis.set_ylim(-0.2, 1.35)
+        axis.set_zlim(-0.2, 1.45)
+        axis.set_xticks([])
+        axis.set_yticks([0.0, 0.5, 1.0])
+        axis.set_zticks([0.0, 0.5, 1.0])
+        axis.set_box_aspect((max(1.5, rendered * 1.7), 1.5, 1.5))
+        axis.view_init(elev=23, azim=-57)

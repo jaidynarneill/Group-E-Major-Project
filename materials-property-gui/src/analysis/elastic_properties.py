@@ -175,6 +175,35 @@ def derive_cubic_properties(c11, c12, c44):
     }
 
 
+def cubic_youngs_modulus(c11, c12, c44, directions):
+    """Calculate Young's modulus along one or more directions for a cubic crystal."""
+    constants = np.asarray([c11, c12, c44], dtype=float)
+    directions = np.asarray(directions, dtype=float)
+    if not np.isfinite(constants).all() or not np.isfinite(directions).all():
+        raise ValueError("Elastic constants and directions must be finite.")
+    if directions.shape[-1:] != (3,):
+        raise ValueError("Directions must end in three Cartesian components.")
+
+    c11, c12, c44 = constants
+    if c44 <= 0.0 or c11 - c12 <= 0.0 or c11 + 2.0 * c12 <= 0.0:
+        raise ValueError("Cubic elastic constants do not define a mechanically stable crystal.")
+
+    lengths = np.linalg.norm(directions, axis=-1, keepdims=True)
+    if np.any(lengths == 0.0):
+        raise ValueError("Directions must be non-zero vectors.")
+    direction_cosines = directions / lengths
+    x2, y2, z2 = np.square(np.moveaxis(direction_cosines, -1, 0))
+
+    compliance_denominator = (c11 - c12) * (c11 + 2.0 * c12)
+    s11 = (c11 + c12) / compliance_denominator
+    s12 = -c12 / compliance_denominator
+    s44 = 1.0 / c44
+    inverse_modulus = s11 - 2.0 * (s11 - s12 - 0.5 * s44) * (x2 * y2 + y2 * z2 + z2 * x2)
+    if np.any(inverse_modulus <= 0.0):
+        raise ValueError("Cubic elastic constants produce a non-positive directional modulus.")
+    return 1.0 / inverse_modulus
+
+
 def _normalize_material(material):
     key = str(material).strip().lower()
     materials = {

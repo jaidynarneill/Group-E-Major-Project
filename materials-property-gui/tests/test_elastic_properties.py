@@ -8,6 +8,7 @@ from src.analysis.elastic_properties import (
     MACE_MODEL_OPTIONS,
     birch_murnaghan,
     create_calculator,
+    cubic_youngs_modulus,
     derive_cubic_properties,
     fit_linear_response,
 )
@@ -39,6 +40,17 @@ class TestElasticProperties(unittest.TestCase):
         self.assertGreater(properties["G_H"], 0.0)
         self.assertGreater(properties["E"], 0.0)
         self.assertGreater(properties["A"], 0.0)
+
+    def test_isotropic_cubic_youngs_modulus_is_direction_independent(self):
+        directions = np.array([
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 1.0, 1.0],
+        ])
+
+        moduli = cubic_youngs_modulus(200.0, 120.0, 40.0, directions)
+
+        np.testing.assert_allclose(moduli, [110.0, 110.0, 110.0])
 
     def test_mace_variants_select_the_requested_checkpoint(self):
         for method, model in MACE_MODEL_OPTIONS.items():
