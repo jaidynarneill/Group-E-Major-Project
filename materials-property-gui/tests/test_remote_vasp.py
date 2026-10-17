@@ -19,7 +19,9 @@ class TestRemoteVaspInspection(unittest.TestCase):
         launcher_bytes = launcher.read_bytes()
 
         self.assertTrue(launcher_bytes.startswith(b"#!/bin/bash\n"))
+        self.assertIn(b"#SBATCH --nodes=1", launcher_bytes)
         self.assertIn(f"#SBATCH --ntasks={VASP_MPI_TASKS}".encode("ascii"), launcher_bytes)
+        self.assertIn(f"#SBATCH --ntasks-per-node={VASP_MPI_TASKS}".encode("ascii"), launcher_bytes)
         self.assertIn(b"#SBATCH --constraint=intel", launcher_bytes)
         self.assertIn(b"#SBATCH --output=/dev/null", launcher_bytes)
         self.assertIn(b"#SBATCH --error=/dev/null", launcher_bytes)
