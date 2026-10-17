@@ -156,18 +156,34 @@ class CalculationWorker(QObject):
         try:
             for run_number, material, lattice, method in self.configurations:
                 label = f"Run {run_number}: {material} / {lattice} / {method}"
+                retry_cached_dft = False
+                cached_surface_warning = None
                 try:
                     cached_result = self.result_cache.load(material, lattice, method)
                 except Exception as error:
                     cached_result = None
                     self.progress.emit(f"Cache check failed for {label}: {error}")
                 if cached_result is not None:
-                    self.progress.emit(f"Loading cached results for {label}...")
-                    results.append((label, cached_result))
-                    surface_warning = _surface_energy_warning(material, lattice, cached_result)
-                    if surface_warning:
-                        errors.append(f"{label} surface energies: {surface_warning}")
-                    continue
+                    cached_surface_warning = _surface_energy_warning(
+                        material,
+                        lattice,
+                        cached_result,
+                    )
+                    retry_cached_dft = (
+                        method.strip().upper() == "DFT"
+                        and cached_surface_warning is not None
+                    )
+                    if retry_cached_dft:
+                        self.progress.emit(
+                            f"Cached DFT results for {label} are missing surface data; "
+                            "retrying the remote surface stage..."
+                        )
+                    else:
+                        self.progress.emit(f"Loading cached results for {label}...")
+                        results.append((label, cached_result))
+                        if cached_surface_warning:
+                            errors.append(f"{label} surface energies: {cached_surface_warning}")
+                        continue
 
                 self.progress.emit(f"Calculating {label}...")
                 try:
@@ -233,6 +249,9 @@ class CalculationWorker(QObject):
                             if secret:
                                 message = message.replace(secret, "[redacted]")
                     errors.append(f"{label}: {message}")
+                    if retry_cached_dft:
+                        results.append((label, cached_result))
+                        errors.append(f"{label} surface energies: {cached_surface_warning}")
             self.completed.emit(results, errors)
         finally:
             self.cluster_credentials = None
