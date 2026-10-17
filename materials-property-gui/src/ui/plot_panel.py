@@ -836,13 +836,12 @@ class PlotPanel(QWidget):
         axis = self._new_axis(
             5,
             "Directional Young's Modulus",
-            "Configuration",
+            "",
             "",
             projection="3d",
         )
-        axis.set_zlabel("", color=self.theme_colors["secondary_text"])
-        theta = np.linspace(0.0, np.pi, 36)
-        phi = np.linspace(0.0, 2.0 * np.pi, 72)
+        theta = np.linspace(0.0, np.pi, 52)
+        phi = np.linspace(0.0, 2.0 * np.pi, 104)
         phi_grid, theta_grid = np.meshgrid(phi, theta)
         directions = np.stack((
             np.sin(theta_grid) * np.cos(phi_grid),
@@ -913,6 +912,7 @@ class PlotPanel(QWidget):
         axis.set_xticks([])
         axis.set_yticks([])
         axis.set_zticks([])
+        axis.grid(False)
         axis.set_box_aspect((max(1.6, len(surfaces) * 1.65), 1.5, 1.5))
         scalar_map = cm.ScalarMappable(norm=normalization, cmap="viridis")
         scalar_map.set_array([])
@@ -922,16 +922,16 @@ class PlotPanel(QWidget):
 
     def _plot_unit_cells(self, results):
         from ase.build import bulk as build_bulk
-        from ase.data import covalent_radii
 
         axis = self._new_axis(
             6,
             "3D Crystal Unit Cells",
-            "Configuration",
-            "Fractional coordinates",
+            "",
+            "",
             projection="3d",
         )
-        axis.set_zlabel("Fractional coordinates", color=self.theme_colors["secondary_text"])
+        axis.set_zlabel("", color=self.theme_colors["secondary_text"])
+        axis.grid(False)
         rendered = 0
         for index, (label, result) in enumerate(results):
             try:
@@ -947,45 +947,44 @@ class PlotPanel(QWidget):
 
             offset = rendered * 1.7
             cell_color = f"C{index % 10}"
+            atomic_number = ASE_CHEMICAL_SYMBOLS.index(result["symbol"])
+            axis.scatter(
+                fractional_positions[:, 0] + offset,
+                fractional_positions[:, 1],
+                fractional_positions[:, 2],
+                s=180,
+                color=cell_color,
+                edgecolors=self.theme_colors["text"],
+                linewidths=0.7,
+                depthshade=True,
+            )
             for first, second in ((0, 0), (0, 1), (1, 0), (1, 1)):
                 axis.plot(
                     [offset, offset + 1.0],
                     [first, first],
                     [second, second],
                     color=self.theme_colors["border"],
-                    linewidth=0.8,
+                    linewidth=1.0,
                 )
                 axis.plot(
                     [offset + first, offset + first],
                     [0.0, 1.0],
                     [second, second],
                     color=self.theme_colors["border"],
-                    linewidth=0.8,
+                    linewidth=1.0,
                 )
                 axis.plot(
                     [offset + first, offset + first],
                     [second, second],
                     [0.0, 1.0],
                     color=self.theme_colors["border"],
-                    linewidth=0.8,
+                    linewidth=1.0,
                 )
-            atomic_number = ASE_CHEMICAL_SYMBOLS.index(result["symbol"])
-            radius = covalent_radii[atomic_number]
-            axis.scatter(
-                fractional_positions[:, 0] + offset,
-                fractional_positions[:, 1],
-                fractional_positions[:, 2],
-                s=max(100.0, (95.0 * radius) ** 2),
-                color=cell_color,
-                edgecolors=self.theme_colors["text"],
-                linewidths=0.7,
-                depthshade=True,
-            )
             axis.text(
                 offset + 0.5,
                 0.5,
                 1.16,
-                f"{label.split(':', 1)[0]}: {result['symbol']}",
+                f"{label.split(':', 1)[0]} - {result['symbol']} ({result['lattice_structure']})",
                 color=self.theme_colors["text"],
                 ha="center",
                 va="bottom",
@@ -1008,7 +1007,7 @@ class PlotPanel(QWidget):
         axis.set_ylim(-0.2, 1.35)
         axis.set_zlim(-0.2, 1.45)
         axis.set_xticks([])
-        axis.set_yticks([0.0, 0.5, 1.0])
-        axis.set_zticks([0.0, 0.5, 1.0])
+        axis.set_yticks([])
+        axis.set_zticks([])
         axis.set_box_aspect((max(1.5, rendered * 1.7), 1.5, 1.5))
         axis.view_init(elev=23, azim=-57)
